@@ -193,29 +193,71 @@ def normalize_notifications(data: dict[str, Any]) -> list[dict[str, Any]]:
 # normalize_* shapes where they already match the whitelist, and add the
 # pagination tokens (has_more / cursor / xsec_token) downstream paging needs.
 
-# Candidate keys for the "大家都在搜" hot-words block in search responses.
-_SEARCH_HOT_WORD_KEYS = ("hot_words", "query_revise")
-
 # Media fields stripped by read --no-media (also implied by --fields).
 _NOTE_MEDIA_KEYS = frozenset({"image_list", "cover", "stream", "live_photo"})
 
 
+def _split_list_items(data: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split raw list items by model_type before projecting.
+
+    - ``model_type == "note"`` (or a missing model_type on an item that carries
+      a ``note_card``) goes through the note whitelist projection.
+    - ``model_type == "hot_query"`` is the "大家都在搜" hot-words block; its
+      inner ``hot_query`` object (``{title, source, queries: [...]}``) is
+      collected separately instead of being projected as a note.
+    - Any other model_type is dropped entirely. Unknown entries are not notes,
+      and forcing them through the note whitelist produced empty-shell rows
+      (empty title/author/liked, a ``<uuid>#<timestamp>`` request-id in
+      ``note_id``) that polluted research output; passing them through raw
+      risks leaking arbitrarily large blocks, so they are discarded.
+    """
+    notes: list[dict[str, Any]] = []
+    hot_queries: list[dict[str, Any]] = []
+    for item in data.get("items", []):
+        if not isinstance(item, dict):
+            continue
+        model_type = item.get("model_type")
+        if model_type == "hot_query":
+            hot_query = item.get("hot_query")
+            if isinstance(hot_query, dict):
+                hot_queries.append(hot_query)
+            continue
+        if model_type is None and not isinstance(item.get("note_card"), dict):
+            continue
+        if model_type not in (None, "note"):
+            continue
+        summary = normalize_note_summary(item)
+        if summary:
+            notes.append(summary)
+    return notes, hot_queries
+
+
 def compact_search_results(data: dict[str, Any]) -> dict[str, Any]:
-    """Whitelist projection of search results for --compact structured output."""
-    compact = normalize_search_results(data)
-    for key in _SEARCH_HOT_WORD_KEYS:
-        if key in data:
-            compact[key] = data[key]
+    """Whitelist projection of search results for --compact structured output.
+
+    Note items are projected to the whitelist; ``hot_query`` items surface as a
+    top-level ``hot_queries`` list (only present when the search returned any).
+    """
+    notes, hot_queries = _split_list_items(data)
+    compact: dict[str, Any] = {
+        "items": notes,
+        "has_more": bool(data.get("has_more", False)),
+    }
+    if hot_queries:
+        compact["hot_queries"] = hot_queries
     return compact
 
 
 def compact_feed(data: dict[str, Any]) -> dict[str, Any]:
     """Whitelist projection of feed/hot results for --compact structured output."""
-    items = [item for item in (normalize_note_summary(item) for item in data.get("items", [])) if item]
-    return {
-        "items": items,
+    notes, hot_queries = _split_list_items(data)
+    compact: dict[str, Any] = {
+        "items": notes,
         "has_more": bool(data.get("has_more", False)),
     }
+    if hot_queries:
+        compact["hot_queries"] = hot_queries
+    return compact
 
 
 def compact_note_item(note: dict[str, Any]) -> dict[str, Any]:

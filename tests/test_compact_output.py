@@ -69,9 +69,72 @@ SEARCH_RESPONSE = {
                 "video": {"media": {"stream": _stream()}},
             },
         },
+        {
+            "id": "hot-query-req-1",
+            "model_type": "hot_query",
+            "hot_query": {
+                "title": "大家都在搜",
+                "source": 2,
+                "queries": [
+                    {
+                        "name": "热词一",
+                        "search_word": "热词一",
+                        "cover": f"https://sns-img.example.com/q1.jpg?{_LONG}",
+                        "id": "query-1",
+                    },
+                    {
+                        "name": "热词二",
+                        "search_word": "热词二",
+                        "cover": f"https://sns-img.example.com/q2.jpg?{_LONG}",
+                        "id": "query-2",
+                    },
+                ],
+            },
+        },
     ],
     "has_more": True,
-    "hot_words": [{"word": "大家都在搜的词", "hot_value": 12345}],
+}
+
+# Production regression fixture: a hot_query entry as actually returned by the
+# search API. hb.1 projected it through the note whitelist and produced an
+# empty-shell note row (empty title/author/liked, request-id-shaped note_id).
+HOT_QUERY_REGRESSION_RESPONSE = {
+    "items": [
+        {
+            "id": "note-1",
+            "xsec_token": "token-1",
+            "model_type": "note",
+            "note_card": {
+                "type": "normal",
+                "display_title": "正常笔记",
+                "user": {"user_id": "u-1", "nickname": "作者甲"},
+                "interact_info": {"liked_count": "12"},
+            },
+        },
+        {
+            "id": "c961794e-8583-4052-8a32-895782037650#1789296424807",
+            "xsec_token": "ABPxn9gORegressionToken",
+            "model_type": "hot_query",
+            "hot_query": {
+                "title": "大家都在搜",
+                "source": 2,
+                "queries": [
+                    {
+                        "name": "regression 热词",
+                        "search_word": "regression 热词",
+                        "cover": "https://sns-img.example.com/regression.jpg",
+                        "id": "query-regression",
+                    },
+                ],
+            },
+        },
+        {
+            "id": "ad-slot-1",
+            "model_type": "ads",
+            "ads": {"creative": {"banner": f"https://sns-img.example.com/ad.jpg?{_LONG}"}},
+        },
+    ],
+    "has_more": False,
 }
 
 FEED_RESPONSE = {
@@ -254,7 +317,7 @@ class TestSearchCompact:
         data = _json_payload(result)["data"]
 
         assert data["has_more"] is True
-        assert data["hot_words"] == SEARCH_RESPONSE["hot_words"]
+        assert data["hot_queries"] == [SEARCH_RESPONSE["items"][2]["hot_query"]]
         assert len(data["items"]) == 2
         for item in data["items"]:
             assert set(item) == ITEM_WHITELIST
@@ -268,7 +331,7 @@ class TestSearchCompact:
         result = _invoke(monkeypatch, _SearchClient(), ["search", "kw", "--compact", "--yaml"])
         data = _yaml_payload(result)["data"]
 
-        assert set(data) == {"items", "has_more", "hot_words"}
+        assert set(data) == {"items", "has_more", "hot_queries"}
         assert {key for item in data["items"] for key in item} == ITEM_WHITELIST
 
     def test_default_output_unchanged(self, monkeypatch):
@@ -278,6 +341,39 @@ class TestSearchCompact:
         assert payload["ok"] is True
         assert payload["schema_version"] == "1"
         assert payload["data"] == SEARCH_RESPONSE
+
+
+class _HotQueryRegressionClient:
+    def search_notes(self, **kwargs):
+        return HOT_QUERY_REGRESSION_RESPONSE
+
+
+class TestSearchHotQuery:
+    def test_hot_query_block_passed_through(self, monkeypatch):
+        result = _invoke(monkeypatch, _HotQueryRegressionClient(), ["search", "kw", "--compact", "--json"])
+        data = _json_payload(result)["data"]
+
+        assert data["hot_queries"] == [HOT_QUERY_REGRESSION_RESPONSE["items"][1]["hot_query"]]
+        (hot_query,) = data["hot_queries"]
+        assert hot_query["title"] == "大家都在搜"
+        assert hot_query["queries"][0]["search_word"] == "regression 热词"
+
+    def test_no_empty_shell_note_rows(self, monkeypatch):
+        result = _invoke(monkeypatch, _HotQueryRegressionClient(), ["search", "kw", "--compact", "--json"])
+        data = _json_payload(result)["data"]
+
+        # Only the real note survives: the hot_query entry and the unknown
+        # "ads" entry must not become empty-shell note rows.
+        assert len(data["items"]) == 1
+        (item,) = data["items"]
+        assert item["note_id"] == "note-1"
+        assert item["title"]
+        assert all("#" not in row["note_id"] for row in data["items"])
+        assert all(row["title"] or row["author"] or row["liked"] for row in data["items"])
+
+    def test_no_hot_queries_key_when_absent(self):
+        compact = compact_search_results({"items": [], "has_more": True})
+        assert compact == {"items": [], "has_more": True}
 
 
 class TestFeedCompact:
@@ -449,9 +545,20 @@ class TestReadTrimming:
 
 
 class TestProjectionUnits:
-    def test_search_hot_word_candidates_pass_through(self):
-        assert compact_search_results({"items": [], "query_revise": {"q": "x"}})["query_revise"] == {"q": "x"}
-        assert "hot_words" not in compact_search_results({"items": []})
+    def test_hot_query_items_are_not_projected_as_notes(self):
+        compact = compact_search_results(HOT_QUERY_REGRESSION_RESPONSE)
+        assert [item["note_id"] for item in compact["items"]] == ["note-1"]
+        assert compact["hot_queries"] == [HOT_QUERY_REGRESSION_RESPONSE["items"][1]["hot_query"]]
+
+    def test_unknown_model_types_are_dropped(self):
+        data = {"items": [{"model_type": "ads", "id": "ad-1"}, {"model_type": "rec_query", "id": "rq-1"}]}
+        assert compact_search_results(data)["items"] == []
+
+    def test_items_without_model_type_need_a_note_card(self):
+        note = {"id": "flat-1", "note_card": {"display_title": "t"}}
+        shell = {"id": "flat-2"}
+        compact = compact_search_results({"items": [note, shell]})
+        assert [item["note_id"] for item in compact["items"]] == ["flat-1"]
 
     def test_strip_note_media_does_not_mutate_input(self):
         payload = {"items": [{"note_card": {"image_list": [_image(0)], "title": "t"}}]}
