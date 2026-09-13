@@ -7,6 +7,7 @@ formatter_renderers.py by providing the shared primitives both need.
 import json
 import os
 import sys
+from collections.abc import Callable
 from typing import Any
 
 import click
@@ -96,11 +97,24 @@ def _normalize_success_payload(data: Any) -> Any:
     return success_payload(data)
 
 
-def maybe_print_structured(data: Any, *, as_json: bool, as_yaml: bool) -> bool:
-    """Print structured output when requested or when stdout is non-TTY."""
+def maybe_print_structured(
+    data: Any,
+    *,
+    as_json: bool,
+    as_yaml: bool,
+    project: Callable[[Any], Any] | None = None,
+) -> bool:
+    """Print structured output when requested or when stdout is non-TTY.
+
+    ``project`` optionally transforms the payload (e.g. --compact/--fields
+    projections) before it is wrapped in the shared envelope. It never
+    affects the rich rendering path.
+    """
     fmt = resolve_output_format(as_json=as_json, as_yaml=as_yaml)
     if not fmt:
         return False
+    if project is not None:
+        data = project(data)
     payload = _normalize_success_payload(data)
     if fmt == "json":
         print_json(payload)

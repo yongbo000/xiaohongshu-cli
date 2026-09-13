@@ -12,8 +12,15 @@ from ..formatter import (
     print_success,
     render_creator_notes,
 )
+from ..formatter_normalizers import compact_paged_notes
 from ..note_refs import save_index_from_notes
-from ._common import exit_for_error, handle_command, run_client_action, structured_output_options
+from ._common import (
+    compact_output_option,
+    exit_for_error,
+    handle_command,
+    run_client_action,
+    structured_output_options,
+)
 
 
 def extract_hashtags(body: str) -> list[str]:
@@ -86,9 +93,10 @@ def post(
 
 @click.command("my-notes")
 @click.option("--page", default=0, help="Page number (0-indexed)")
+@compact_output_option
 @structured_output_options
 @click.pass_context
-def my_notes(ctx, page: int, as_json: bool, as_yaml: bool):
+def my_notes(ctx, page: int, compact: bool, as_json: bool, as_yaml: bool):
     """List your own published notes."""
     def _my_notes_action(client):
         data = client.get_creator_note_list(page=page)
@@ -102,6 +110,7 @@ def my_notes(ctx, page: int, as_json: bool, as_yaml: bool):
         render=render_creator_notes,
         as_json=as_json,
         as_yaml=as_yaml,
+        project=compact_paged_notes if compact else None,
     )
 
 

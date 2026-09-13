@@ -8,6 +8,17 @@ A CLI for Xiaohongshu (小红书) — search, read, interact, and post via rever
 
 [English](#features) | [中文](#功能特性)
 
+## 基于上游仓库的改造说明（yongbo000 fork）
+
+本 fork 基于上游 [jackwener/xiaohongshu-cli](https://github.com/jackwener/xiaohongshu-cli) 改造，基线 commit：[`4d63f3c0c85ccd9054fa8e96d7f761aaf2507449`](https://github.com/jackwener/xiaohongshu-cli/commit/4d63f3c0c85ccd9054fa8e96d7f761aaf2507449)（v0.6.4）。改造目标：结构化输出（`--json` / `--yaml`）原样倒出上游 API 原始 payload，体量经常超过下游 64KB / 51200 字符的截断线，因此新增输出精简开关。**不带任何开关时输出与上游完全一致。**
+
+- **A. 列表命令 `--compact`**：覆盖 `search` / `feed` / `hot` / `user-posts` / `favorites` / `likes` / `my-notes`。开启后结构化输出改走白名单投影，每条笔记只保留 `note_id`、`xsec_token`（下游 `xhs read` 依赖）、`title`、`author`、`liked`、`note_type`；`search` / `feed` 附带 `has_more`，`user-posts` / `favorites` / `likes` / `my-notes` 附带 `has_more` + `cursor`（翻页凭据），`search` 额外保留「大家都在搜」热词块（`hot_words` / `query_revise` 按上游实际键名透传）。
+- **B. 精读命令 `read --no-media` / `--fields`**：`--no-media` 只剥离媒体字段（`image_list` / `cover` / `stream` / `live_photo`，含视频 h264/h265/av1 多档 URL），其余原样保留；`--fields a,b,c` 语义为「先 `--no-media`，再按逗号白名单精确取字段」，两者可叠加。调研常用白名单：`note_id,title,desc,user,time,interact_info,tag_list`。
+
+与上游同步方式：`git fetch upstream && git rebase upstream/main`。
+
+Tag 语义：`v<上游版本>-hb.<自有迭代号>`（如 `v0.6.4-hb.1` 表示基于上游 v0.6.4 的第 1 次自有迭代）。
+
 ## More Tools
 
 - [bilibili-cli](https://github.com/jackwener/bilibili-cli) — Bilibili CLI for videos, users, search, and feeds

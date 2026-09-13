@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import click
 
@@ -25,6 +25,16 @@ def structured_output_options(command: Callable) -> Callable:
     command = click.option("--yaml", "as_yaml", is_flag=True, help="Output as YAML.")(command)
     command = click.option("--json", "as_json", is_flag=True, help="Output as JSON.")(command)
     return command
+
+
+def compact_output_option(command: Callable) -> Callable:
+    """Add a --compact option for whitelist-projected structured output."""
+    return click.option(
+        "--compact",
+        is_flag=True,
+        help="Trim structured output to essential fields "
+        "(note_id, xsec_token, title, author, liked, note_type, pagination).",
+    )(command)
 
 
 def _cookie_source(ctx) -> str:
@@ -58,13 +68,18 @@ def handle_command(
     as_json: bool,
     as_yaml: bool,
     prefix: str | None = None,
+    project: Callable[[T], Any] | None = None,
 ):
-    """Run a client action, emit structured output if requested, else render."""
+    """Run a client action, emit structured output if requested, else render.
+
+    ``project`` optionally transforms the structured payload (e.g. --compact
+    projections); the rich rendering path always sees the raw data.
+    """
     from ..formatter import maybe_print_structured
 
     try:
         data = run_client_action(ctx, action)
-        if not maybe_print_structured(data, as_json=as_json, as_yaml=as_yaml) and render:
+        if not maybe_print_structured(data, as_json=as_json, as_yaml=as_yaml, project=project) and render:
             render(data)
         return data
     except (XhsApiError, NoCookieError) as exc:

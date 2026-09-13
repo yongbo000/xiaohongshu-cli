@@ -1,5 +1,7 @@
 """Reading commands: search, read, comments, sub-comments, user, user-posts, feed, hot, topics, search-user."""
 
+from functools import partial
+
 import click
 
 from ..command_normalizers import normalize_paged_notes
@@ -16,8 +18,21 @@ from ..formatter import (
     render_user_posts,
     render_users,
 )
+from ..formatter_normalizers import (
+    compact_feed,
+    compact_paged_notes,
+    compact_search_results,
+    pick_note_fields,
+    strip_note_media,
+)
 from ..note_refs import resolve_note_reference, save_index_from_items, save_index_from_notes
-from ._common import exit_for_error, handle_command, run_client_action, structured_output_options
+from ._common import (
+    compact_output_option,
+    exit_for_error,
+    handle_command,
+    run_client_action,
+    structured_output_options,
+)
 
 # ─── Token propagation ─────────────────────────────────────────────────────
 
@@ -55,9 +70,10 @@ TYPE_MAP = {
 @click.option("--sort", type=click.Choice(["general", "popular", "latest"]), default="general", help="Sort order")
 @click.option("--type", "note_type", type=click.Choice(["all", "video", "image"]), default="all", help="Note type")
 @click.option("--page", default=1, help="Page number")
+@compact_output_option
 @structured_output_options
 @click.pass_context
-def search(ctx, keyword: str, sort: str, note_type: str, page: int, as_json: bool, as_yaml: bool):
+def search(ctx, keyword: str, sort: str, note_type: str, page: int, compact: bool, as_json: bool, as_yaml: bool):
     """Search notes by keyword."""
     def _search_action(client):
         result = client.search_notes(
@@ -76,20 +92,42 @@ def search(ctx, keyword: str, sort: str, note_type: str, page: int, as_json: boo
         render=render_search_results,
         as_json=as_json,
         as_yaml=as_yaml,
+        project=compact_search_results if compact else None,
     )
 
 
 @click.command()
 @click.argument("id_or_url")
 @click.option("--xsec-token", default="", help="Security token (or reuse a cached token for this note)")
+@click.option(
+    "--no-media",
+    "no_media",
+    is_flag=True,
+    help="Strip media fields (image_list, cover, stream, live_photo) from structured output",
+)
+@click.option(
+    "--fields",
+    default=None,
+    metavar="LIST",
+    help="Comma-separated note fields to keep in structured output (implies --no-media)",
+)
 @structured_output_options
 @click.pass_context
-def read(ctx, id_or_url: str, xsec_token: str, as_json: bool, as_yaml: bool):
+def read(ctx, id_or_url: str, xsec_token: str, no_media: bool, fields: str | None, as_json: bool, as_yaml: bool):
     """Read a note by ID, URL, or short index."""
     note_id, token, url_source = resolve_note_reference(id_or_url, xsec_token=xsec_token)
     xsec_source = url_source or "pc_feed"
     if token:
         cache_note_context(note_id, token, xsec_source)
+
+    project = None
+    if fields is not None:
+        whitelist = [field.strip() for field in fields.split(",") if field.strip()]
+        if not whitelist:
+            raise click.UsageError("--fields requires at least one field name.")
+        project = partial(pick_note_fields, fields=whitelist)
+    elif no_media:
+        project = strip_note_media
 
     def _read_action(client):
         kwargs = {"xsec_token": token}
@@ -103,6 +141,7 @@ def read(ctx, id_or_url: str, xsec_token: str, as_json: bool, as_yaml: bool):
         render=render_note,
         as_json=as_json,
         as_yaml=as_yaml,
+        project=project,
     )
 
 
@@ -165,9 +204,10 @@ def user(ctx, user_id: str, as_json: bool, as_yaml: bool):
 @click.command("user-posts")
 @click.argument("user_id")
 @click.option("--cursor", default="", help="Pagination cursor")
+@compact_output_option
 @structured_output_options
 @click.pass_context
-def user_posts(ctx, user_id: str, cursor: str, as_json: bool, as_yaml: bool):
+def user_posts(ctx, user_id: str, cursor: str, compact: bool, as_json: bool, as_yaml: bool):
     """List a user's published notes."""
     def _user_posts_action(client):
         data = client.get_user_notes(user_id, cursor=cursor)
@@ -187,13 +227,15 @@ def user_posts(ctx, user_id: str, cursor: str, as_json: bool, as_yaml: bool):
         render=_render_user_posts,
         as_json=as_json,
         as_yaml=as_yaml,
+        project=compact_paged_notes if compact else None,
     )
 
 
 @click.command()
+@compact_output_option
 @structured_output_options
 @click.pass_context
-def feed(ctx, as_json: bool, as_yaml: bool):
+def feed(ctx, compact: bool, as_json: bool, as_yaml: bool):
     """Browse the recommendation feed."""
     def _feed_action(client):
         result = client.get_home_feed()
@@ -207,6 +249,7 @@ def feed(ctx, as_json: bool, as_yaml: bool):
         render=render_feed,
         as_json=as_json,
         as_yaml=as_yaml,
+        project=compact_feed if compact else None,
     )
 
 
@@ -278,9 +321,10 @@ HOT_CATEGORIES = {
     default="food",
     help="Category (fashion, food, cosmetics, movie, career, love, home, gaming, travel, fitness)",
 )
+@compact_output_option
 @structured_output_options
 @click.pass_context
-def hot(ctx, category: str, as_json: bool, as_yaml: bool):
+def hot(ctx, category: str, compact: bool, as_json: bool, as_yaml: bool):
     """Browse hot/trending notes by category."""
     def _hot_action(client):
         result = client.get_hot_feed(HOT_CATEGORIES[category])
@@ -294,4 +338,5 @@ def hot(ctx, category: str, as_json: bool, as_yaml: bool):
         render=render_feed,
         as_json=as_json,
         as_yaml=as_yaml,
+        project=compact_feed if compact else None,
     )

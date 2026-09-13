@@ -185,3 +185,94 @@ def normalize_notifications(data: dict[str, Any]) -> list[dict[str, Any]]:
             "time": message.get("time", 0),
         })
     return normalized
+
+
+# ─── Compact projections (--compact / --no-media / --fields) ────────────────
+#
+# These power trimmed structured output: they reuse the renderer-facing
+# normalize_* shapes where they already match the whitelist, and add the
+# pagination tokens (has_more / cursor / xsec_token) downstream paging needs.
+
+# Candidate keys for the "大家都在搜" hot-words block in search responses.
+_SEARCH_HOT_WORD_KEYS = ("hot_words", "query_revise")
+
+# Media fields stripped by read --no-media (also implied by --fields).
+_NOTE_MEDIA_KEYS = frozenset({"image_list", "cover", "stream", "live_photo"})
+
+
+def compact_search_results(data: dict[str, Any]) -> dict[str, Any]:
+    """Whitelist projection of search results for --compact structured output."""
+    compact = normalize_search_results(data)
+    for key in _SEARCH_HOT_WORD_KEYS:
+        if key in data:
+            compact[key] = data[key]
+    return compact
+
+
+def compact_feed(data: dict[str, Any]) -> dict[str, Any]:
+    """Whitelist projection of feed/hot results for --compact structured output."""
+    items = [item for item in (normalize_note_summary(item) for item in data.get("items", [])) if item]
+    return {
+        "items": items,
+        "has_more": bool(data.get("has_more", False)),
+    }
+
+
+def compact_note_item(note: dict[str, Any]) -> dict[str, Any]:
+    """Whitelist projection of one flat paged note (user-posts/favorites/likes/my-notes)."""
+    interact = note.get("interact_info", {})
+    user = note.get("user", {})
+    return {
+        "note_id": note.get("note_id", note.get("id", "")),
+        "xsec_token": note.get("xsec_token", ""),
+        "title": str(note.get("display_title", note.get("title", "")))[:40],
+        "author": user.get("nickname", ""),
+        "liked": str(interact.get("liked_count", note.get("liked_count", ""))),
+        "note_type": "video" if note.get("type") == "video" else "image",
+    }
+
+
+def compact_paged_notes(data: dict[str, Any]) -> dict[str, Any]:
+    """Whitelist projection of paged note lists for --compact structured output."""
+    notes = data.get("notes", data.get("note_list", []))
+    return {
+        "items": [compact_note_item(note) for note in notes],
+        "has_more": bool(data.get("has_more", False)),
+        "cursor": data.get("cursor", ""),
+    }
+
+
+def _strip_keys(value: Any, keys: frozenset[str]) -> Any:
+    if isinstance(value, dict):
+        return {key: _strip_keys(item, keys) for key, item in value.items() if key not in keys}
+    if isinstance(value, list):
+        return [_strip_keys(item, keys) for item in value]
+    return value
+
+
+def strip_note_media(data: Any) -> Any:
+    """Return a copy of note detail data without media fields (read --no-media)."""
+    return _strip_keys(data, _NOTE_MEDIA_KEYS)
+
+
+def pick_note_fields(data: Any, fields: list[str]) -> Any:
+    """Keep only whitelisted note fields after stripping media (read --fields).
+
+    Handles both note detail shapes: the feed-API envelope
+    ({"items": [{"note_card": ...}]}) and the flat HTML-parsed note.
+    """
+    stripped = strip_note_media(data)
+    if isinstance(stripped, dict) and isinstance(stripped.get("items"), list):
+        items = []
+        for item in stripped["items"]:
+            note = item.get("note_card") if isinstance(item, dict) else None
+            if not isinstance(note, dict):
+                items.append(item)
+                continue
+            source = dict(note)
+            source.setdefault("note_id", item.get("id", item.get("note_id", "")))
+            items.append({"note_card": {field: source[field] for field in fields if field in source}})
+        return {"items": items}
+    if isinstance(stripped, dict):
+        return {field: stripped[field] for field in fields if field in stripped}
+    return stripped

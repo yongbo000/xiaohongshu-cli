@@ -213,7 +213,7 @@ class TestCliBasic:
         monkeypatch.setenv("OUTPUT", "rich")
         monkeypatch.setattr(
             "xhs_cli.commands.reading.handle_command",
-            lambda ctx, action, render, as_json, as_yaml: render({
+            lambda ctx, action, render, as_json, as_yaml, project=None: render({
                 "items": [
                     {
                         "id": "69ad061d000000002603326d",
@@ -240,7 +240,7 @@ class TestCliBasic:
         monkeypatch.setenv("OUTPUT", "rich")
         monkeypatch.setattr(
             "xhs_cli.commands.reading.handle_command",
-            lambda ctx, action, render, as_json, as_yaml: render({
+            lambda ctx, action, render, as_json, as_yaml, project=None: render({
                 "items": [
                     {
                         "id": "69ad061d000000002603326d",
@@ -289,7 +289,7 @@ class TestCliBasic:
                 called["kwargs"] = kwargs
                 return FAKE_NOTE_RESPONSE
 
-        def fake_handle_command(ctx, action, render, as_json, as_yaml):
+        def fake_handle_command(ctx, action, render, as_json, as_yaml, project=None):
             action(FakeClient())
             return None
 
@@ -355,7 +355,7 @@ class TestCliBasic:
         saved = []
         monkeypatch.setattr("xhs_cli.note_refs.save_note_index", lambda items: saved.append(items))
 
-        def fake_handle_command(ctx, action, render, as_json, as_yaml):
+        def fake_handle_command(ctx, action, render, as_json, as_yaml, project=None):
             class FakeClient:
                 def get_user_notes(self, user_id, cursor=""):
                     return {
@@ -489,7 +489,7 @@ class TestCliBasic:
         monkeypatch.setattr("xhs_cli.note_refs.save_note_index", lambda items: saved.append(items))
         monkeypatch.setattr("xhs_cli.commands.social._resolve_user_id", lambda ctx, user_id: "user-1")
 
-        def fake_handle_command(ctx, action, render, as_json, as_yaml):
+        def fake_handle_command(ctx, action, render, as_json, as_yaml, project=None):
             class FakeClient:
                 def get_user_favorites(self, user_id, cursor=""):
                     return {
@@ -519,7 +519,7 @@ class TestCliBasic:
         saved = []
         monkeypatch.setattr("xhs_cli.note_refs.save_note_index", lambda items: saved.append(items))
 
-        def fake_handle_command(ctx, action, render, as_json, as_yaml):
+        def fake_handle_command(ctx, action, render, as_json, as_yaml, project=None):
             class FakeClient:
                 def get_creator_note_list(self, page=0):
                     return {
