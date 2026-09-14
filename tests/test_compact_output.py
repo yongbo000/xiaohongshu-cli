@@ -7,7 +7,13 @@ import yaml
 from click.testing import CliRunner
 
 from xhs_cli.cli import cli
-from xhs_cli.formatter_normalizers import compact_search_results, pick_note_fields, strip_note_media
+from xhs_cli.client_mixins import ReadingEndpointsMixin
+from xhs_cli.formatter_normalizers import (
+    compact_comments,
+    compact_search_results,
+    pick_note_fields,
+    strip_note_media,
+)
 from xhs_cli.formatter_utils import success_payload
 
 runner = CliRunner()
@@ -247,6 +253,10 @@ def _no_note_index_writes(monkeypatch):
 def _invoke(monkeypatch, client, args):
     monkeypatch.setattr(
         "xhs_cli.commands._common.run_client_action",
+        lambda ctx, action: action(client),
+    )
+    monkeypatch.setattr(
+        "xhs_cli.commands.reading.run_client_action",
         lambda ctx, action: action(client),
     )
     result = runner.invoke(cli, args)
@@ -588,3 +598,377 @@ class TestPayloadSizeReduction:
         with capsys.disabled():
             print(f"\nread structured payload: full={full}B no-media={trimmed}B")
         assert trimmed < full // 2
+
+
+# ─── comments / sub-comments (--compact / --limit) ──────────────────────────
+
+COMMENT_WHITELIST = {
+    "id",
+    "note_id",
+    "content",
+    "like_count",
+    "liked",
+    "ip_location",
+    "create_time",
+    "is_author",
+    "is_pinned",
+    "sub_comment_count",
+    "sub_comment_cursor",
+    "sub_comment_has_more",
+    "user_info",
+    "at_users",
+}
+COMMENT_DROPPED_KEYS = {"show_tags", "sub_comments", "pictures", "status", "invalid", "avatar", "xsec_token"}
+
+
+def _comment_user(index: int) -> dict:
+    return {
+        "user_id": f"user-{index}",
+        "nickname": f"评论用户{index}",
+        "avatar": f"https://sns-avatar.example.com/{index}.jpg?{_LONG}",
+        "xsec_token": f"xsec-{index}-{_LONG}",
+    }
+
+
+def _embedded_sub_comment(index: int) -> dict:
+    return {
+        "id": f"sub-{index}",
+        "note_id": "note-1",
+        "content": f"楼中楼回复{index}，嵌入预览层。",
+        "user_info": _comment_user(100 + index),
+        "like_count": "12",
+        "liked": False,
+        "ip_location": "上海",
+        "create_time": 1757000000000,
+        "status": 2,
+        "show_tags": [],
+        "at_users": [],
+        "sub_comment_count": "0",
+        "sub_comment_cursor": "",
+        "sub_comment_has_more": False,
+    }
+
+
+COMMENTS_RESPONSE = {
+    "cursor": "cursor-page-2",
+    "has_more": True,
+    "comments": [
+        {
+            "id": "cmt-1",
+            "note_id": "note-1",
+            "content": "第一条评论内容，长度大约二三十个汉字。",
+            "user_info": _comment_user(1),
+            "like_count": "234",
+            "liked": False,
+            "ip_location": "广东",
+            "create_time": 1757000000000,
+            "status": 2,
+            "invalid": False,
+            "show_tags": ["is_author"],
+            "at_users": [{"user_id": "user-9", "nickname": "被圈的人", "avatar": f"https://sns-avatar.example.com/9.jpg?{_LONG}"}],
+            "sub_comment_count": "3",
+            "sub_comment_cursor": "sub-cursor-1",
+            "sub_comment_has_more": True,
+            "sub_comments": [_embedded_sub_comment(1), _embedded_sub_comment(2)],
+            "pictures": [_image(9)],
+        },
+        {
+            "id": "cmt-2",
+            "note_id": "note-1",
+            "content": "回复别人的评论。",
+            "user_info": _comment_user(2),
+            "like_count": "5",
+            "liked": True,
+            "ip_location": "上海",
+            "create_time": 1757000001000,
+            "show_tags": None,
+            "sub_comment_count": "0",
+            "sub_comment_cursor": "",
+            "sub_comment_has_more": False,
+            "target_comment": {
+                "id": "cmt-1",
+                "user_info": _comment_user(1),
+                "content": "第一条评论内容，长度大约二三十个汉字。",
+            },
+        },
+    ],
+}
+
+SUB_COMMENTS_RESPONSE = {
+    "cursor": "sub-page-2",
+    "has_more": True,
+    "comments": [
+        {
+            "id": "reply-1",
+            "note_id": "note-1",
+            "content": "楼中楼回复一。",
+            "user_info": _comment_user(3),
+            "like_count": "8",
+            "liked": False,
+            "ip_location": "北京",
+            "create_time": 1757000002000,
+            "show_tags": [],
+            "sub_comment_count": "0",
+            "sub_comment_cursor": "",
+            "sub_comment_has_more": False,
+            "target_comment": {
+                "id": "cmt-1",
+                "user_info": _comment_user(1),
+                "content": "第一条评论内容，长度大约二三十个汉字。",
+            },
+        },
+        {
+            "id": "reply-2",
+            "note_id": "note-1",
+            "content": "楼中楼回复二。",
+            "user_info": _comment_user(4),
+            "like_count": "2",
+            "liked": False,
+            "ip_location": "浙江",
+            "create_time": 1757000003000,
+            "sub_comment_count": "0",
+            "sub_comment_cursor": "",
+            "sub_comment_has_more": False,
+        },
+    ],
+}
+
+
+class _CommentsClient:
+    def get_comments(self, note_id, cursor="", **kwargs):
+        return COMMENTS_RESPONSE
+
+
+class _AllCommentsClient(ReadingEndpointsMixin):
+    """Fake client that runs the real get_all_comments over scripted pages."""
+
+    def __init__(self, pages):
+        self._pages = pages
+        self.requested_cursors = []
+
+    def get_comments(self, note_id, cursor="", **kwargs):
+        self.requested_cursors.append(cursor)
+        return self._pages[len(self.requested_cursors) - 1]
+
+
+def _comments_page(index: int, count: int, *, has_more: bool) -> dict:
+    return {
+        "cursor": f"cursor-page-{index + 1}",
+        "has_more": has_more,
+        "comments": [
+            {
+                "id": f"cmt-p{index}-{i}",
+                "note_id": "note-1",
+                "content": f"第{index}页第{i}条评论。",
+                "user_info": _comment_user(index * 100 + i),
+                "like_count": "1",
+                "liked": False,
+                "ip_location": "广东",
+                "create_time": 1757000000000,
+                "show_tags": [],
+                "sub_comment_count": "0",
+                "sub_comment_cursor": "",
+                "sub_comment_has_more": False,
+            }
+            for i in range(count)
+        ],
+    }
+
+
+class _SubCommentsClient:
+    def get_sub_comments(self, note_id, root_comment_id, num=30, cursor=""):
+        return SUB_COMMENTS_RESPONSE
+
+
+class TestCommentsCompact:
+    def test_compact_json_whitelist(self, monkeypatch):
+        result = _invoke(monkeypatch, _CommentsClient(), ["comments", "note-1", "--compact", "--json"])
+        payload = _json_payload(result)
+
+        assert payload["ok"] is True
+        assert payload["schema_version"] == "1"
+        data = payload["data"]
+        assert data["cursor"] == "cursor-page-2"
+        assert data["has_more"] is True
+        assert len(data["comments"]) == 2
+
+        first, second = data["comments"]
+        assert set(first) == COMMENT_WHITELIST
+        assert first["id"] == "cmt-1"
+        assert first["is_author"] is True
+        assert first["is_pinned"] is False
+        assert first["sub_comment_cursor"] == "sub-cursor-1"
+        assert first["sub_comment_has_more"] is True
+        assert first["user_info"] == {"nickname": "评论用户1", "user_id": "user-1"}
+        assert first["at_users"] == ["被圈的人"]
+
+        # show_tags null / at_users absent / target_comment present.
+        assert set(second) == (COMMENT_WHITELIST - {"at_users"}) | {"target_comment"}
+        assert second["is_author"] is False
+        assert second["is_pinned"] is False
+        assert second["target_comment"] == {"id": "cmt-1", "nickname": "评论用户1"}
+
+        assert not _contains_any_key(data, COMMENT_DROPPED_KEYS)
+
+    def test_compact_yaml_envelope(self, monkeypatch):
+        result = _invoke(monkeypatch, _CommentsClient(), ["comments", "note-1", "--compact", "--yaml"])
+        data = _yaml_payload(result)["data"]
+
+        assert set(data) == {"comments", "cursor", "has_more"}
+        assert {key for comment in data["comments"] for key in comment["user_info"]} == {"nickname", "user_id"}
+
+    def test_compact_all_keeps_aggregate_fields(self, monkeypatch):
+        pages = [_comments_page(0, 10, has_more=False)]
+        result = _invoke(monkeypatch, _AllCommentsClient(pages), ["comments", "note-1", "--all", "--compact", "--json"])
+        data = _json_payload(result)["data"]
+
+        assert set(data) == {"comments", "cursor", "has_more", "total_fetched", "pages_fetched"}
+        assert data["total_fetched"] == 10
+        assert data["pages_fetched"] == 1
+
+    def test_default_output_unchanged(self, monkeypatch):
+        result = _invoke(monkeypatch, _CommentsClient(), ["comments", "note-1", "--json"])
+        assert _json_payload(result)["data"] == COMMENTS_RESPONSE
+
+    def test_limit_truncates_page_but_keeps_pagination(self, monkeypatch):
+        result = _invoke(monkeypatch, _CommentsClient(), ["comments", "note-1", "--limit", "1", "--json"])
+        data = _json_payload(result)["data"]
+
+        assert len(data["comments"]) == 1
+        assert data["comments"][0]["id"] == "cmt-1"
+        assert data["cursor"] == "cursor-page-2"
+        assert data["has_more"] is True
+
+    def test_limit_without_compact_keeps_raw_comment_fields(self, monkeypatch):
+        result = _invoke(monkeypatch, _CommentsClient(), ["comments", "note-1", "--limit", "1", "--json"])
+        comment = _json_payload(result)["data"]["comments"][0]
+
+        assert comment == COMMENTS_RESPONSE["comments"][0]
+
+    def test_limit_rejects_non_positive(self, monkeypatch):
+        client = _CommentsClient()
+        monkeypatch.setattr(
+            "xhs_cli.commands._common.run_client_action",
+            lambda ctx, action: action(client),
+        )
+        for bad in ("0", "-3"):
+            result = runner.invoke(cli, ["comments", "note-1", "--limit", bad])
+            assert result.exit_code != 0
+
+    def test_all_with_limit_stops_paginating_early(self, monkeypatch):
+        pages = [
+            _comments_page(0, 10, has_more=True),
+            _comments_page(1, 10, has_more=True),
+            _comments_page(2, 10, has_more=False),
+        ]
+        client = _AllCommentsClient(pages)
+        result = _invoke(monkeypatch, client, ["comments", "note-1", "--all", "--limit", "15", "--json"])
+        data = _json_payload(result)["data"]
+
+        assert data["total_fetched"] == 15
+        assert data["pages_fetched"] == 2
+        assert len(data["comments"]) == 15
+        # Early stop: the third page was never requested, and the resume
+        # cursor is reported instead of the exhausted aggregate sentinel.
+        assert client.requested_cursors == ["", "cursor-page-1"]
+        assert data["has_more"] is True
+        assert data["cursor"] == "cursor-page-2"
+
+    def test_all_without_limit_fetches_everything(self, monkeypatch):
+        pages = [
+            _comments_page(0, 10, has_more=True),
+            _comments_page(1, 10, has_more=False),
+        ]
+        client = _AllCommentsClient(pages)
+        result = _invoke(monkeypatch, client, ["comments", "note-1", "--all", "--json"])
+        data = _json_payload(result)["data"]
+
+        assert data["total_fetched"] == 20
+        assert data["pages_fetched"] == 2
+        assert data["has_more"] is False
+        assert data["cursor"] == ""
+
+    def test_compact_does_not_affect_rich_render(self, monkeypatch):
+        monkeypatch.setenv("OUTPUT", "rich")
+        result = _invoke(monkeypatch, _CommentsClient(), ["comments", "note-1", "--compact"])
+
+        assert "评论用户1" in result.output
+        assert "第一条评论内容" in result.output
+
+
+class TestSubCommentsCompact:
+    def test_compact_json_whitelist(self, monkeypatch):
+        result = _invoke(
+            monkeypatch,
+            _SubCommentsClient(),
+            ["sub-comments", "note-1", "cmt-1", "--compact", "--json"],
+        )
+        data = _json_payload(result)["data"]
+
+        assert data["cursor"] == "sub-page-2"
+        assert data["has_more"] is True
+        first, second = data["comments"]
+        assert first["target_comment"] == {"id": "cmt-1", "nickname": "评论用户1"}
+        assert "target_comment" not in second
+        assert not _contains_any_key(data, COMMENT_DROPPED_KEYS)
+
+    def test_default_output_unchanged(self, monkeypatch):
+        result = _invoke(monkeypatch, _SubCommentsClient(), ["sub-comments", "note-1", "cmt-1", "--yaml"])
+        assert _yaml_payload(result)["data"] == SUB_COMMENTS_RESPONSE
+
+    def test_limit_truncates_page_but_keeps_pagination(self, monkeypatch):
+        result = _invoke(
+            monkeypatch,
+            _SubCommentsClient(),
+            ["sub-comments", "note-1", "cmt-1", "--limit", "1", "--json"],
+        )
+        data = _json_payload(result)["data"]
+
+        assert [comment["id"] for comment in data["comments"]] == ["reply-1"]
+        assert data["cursor"] == "sub-page-2"
+        assert data["has_more"] is True
+
+    def test_limit_rejects_non_positive(self, monkeypatch):
+        client = _SubCommentsClient()
+        monkeypatch.setattr(
+            "xhs_cli.commands._common.run_client_action",
+            lambda ctx, action: action(client),
+        )
+        result = runner.invoke(cli, ["sub-comments", "note-1", "cmt-1", "--limit", "0"])
+        assert result.exit_code != 0
+
+    def test_compact_does_not_affect_rich_render(self, monkeypatch):
+        monkeypatch.setenv("OUTPUT", "rich")
+        result = _invoke(monkeypatch, _SubCommentsClient(), ["sub-comments", "note-1", "cmt-1", "--compact"])
+
+        assert "评论用户3" in result.output
+        assert "楼中楼回复一" in result.output
+
+
+class TestCommentsProjectionUnits:
+    def test_show_tags_missing_or_null_tolerated(self):
+        projected = compact_comments({"comments": [{"id": "c1"}, {"id": "c2", "show_tags": None}]})
+        first, second = projected["comments"]
+        assert first["is_author"] is False
+        assert first["is_pinned"] is False
+        assert second["is_author"] is False
+
+    def test_unknown_show_tags_ignored(self):
+        projected = compact_comments({"comments": [{"id": "c1", "show_tags": ["is_author", "some_unknown_tag"]}]})
+        (comment,) = projected["comments"]
+        assert comment["is_author"] is True
+        assert "show_tags" not in comment
+        assert "some_unknown_tag" not in comment.values()
+
+    def test_aggregate_fields_passed_through(self):
+        compact = compact_comments(
+            {"comments": [], "cursor": "", "has_more": False, "total_fetched": 3, "pages_fetched": 1}
+        )
+        assert compact == {"comments": [], "cursor": "", "has_more": False, "total_fetched": 3, "pages_fetched": 1}
+
+    def test_compact_shrinks_comments_payload(self, capsys):
+        full = TestPayloadSizeReduction._size(COMMENTS_RESPONSE)
+        compact = TestPayloadSizeReduction._size(compact_comments(COMMENTS_RESPONSE))
+        with capsys.disabled():
+            print(f"\ncomments structured payload: full={full}B compact={compact}B")
+        assert compact < full // 2

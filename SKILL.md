@@ -88,7 +88,8 @@ Payloads live under `.data`.
 | `xhs read <id_or_url_or_index>` | Read a note by ID, URL, or short index | `xhs read 1` / `xhs read "https://...?xsec_token=xxx"` |
 | `xhs comments <id_or_url_or_index>` | Get comments by ID, URL, or short index | `xhs comments 1` / `xhs comments "https://...?xsec_token=..."` |
 | `xhs comments <id_or_url> --all` | Get ALL comments (auto-paginate) | `xhs comments "<url>" --all --json` |
-| `xhs sub-comments <note_id> <comment_id>` | Get replies to comment | `xhs sub-comments abc 123` |
+| `xhs comments <id_or_url> --compact [--limit N]` | Trimmed comment fields (whitelist projection, keeps cursors; `--limit` caps top-level count, with `--all` stops paginating early) | `xhs comments 1 --all --compact --limit 100 --json` |
+| `xhs sub-comments <note_id> <comment_id>` | Get replies to comment (also supports `--compact` / `--limit N`) | `xhs sub-comments abc 123 --compact` |
 | `xhs user <user_id>` | View user profile | `xhs user 5f2e123` |
 | `xhs user-posts <user_id>` | List user's notes | `xhs user-posts 5f2e123 --cursor ""` |
 | `xhs feed` | Browse recommendation feed | `xhs feed --yaml` |
@@ -169,10 +170,12 @@ xhs notifications --type mentions --json | jq '.data.message_list[:5]'
 ### Analyze all comments on a note
 
 ```bash
-# Fetch ALL comments and analyze themes
-xhs comments "$NOTE_URL" --all --json | jq '.data.comments | length'
+# Fetch ALL comments and analyze themes (--compact keeps the payload small enough to survive stdout truncation)
+xhs comments "$NOTE_URL" --all --compact --json | jq '.data.comments | length'
 # Count questions
-xhs comments "$NOTE_URL" --all --json | jq '[.data.comments[] | select(.content | test("[\uff1f?]"))] | length'
+xhs comments "$NOTE_URL" --all --compact --json | jq '[.data.comments[] | select(.content | test("[\uff1f?]"))] | length'
+# Only need a sample? --limit stops paginating early once N comments are fetched
+xhs comments "$NOTE_URL" --all --compact --limit 100 --json | jq '.data.total_fetched, .data.pages_fetched'
 ```
 
 ### Daily reading workflow
@@ -209,7 +212,7 @@ xhs login --qrcode
 ```bash
 # User pastes a URL → read + all comments
 xhs read "https://www.xiaohongshu.com/explore/xxx?xsec_token=yyy" --json
-xhs comments "https://www.xiaohongshu.com/explore/xxx?xsec_token=yyy" --all --json
+xhs comments "https://www.xiaohongshu.com/explore/xxx?xsec_token=yyy" --all --compact --json
 ```
 
 ## Hot Categories

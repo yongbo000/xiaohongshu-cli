@@ -433,6 +433,7 @@ class ReadingEndpointsMixin:
         xsec_token: str = "",
         xsec_source: str = "",
         max_pages: int = 20,
+        max_comments: int | None = None,
     ) -> dict[str, Any]:
         all_comments: list[dict[str, Any]] = []
         cursor = ""
@@ -454,6 +455,20 @@ class ReadingEndpointsMixin:
 
             has_more = data.get("has_more", False)
             next_cursor = data.get("cursor", "")
+
+            if max_comments is not None and len(all_comments) >= max_comments:
+                all_comments = all_comments[:max_comments]
+                if has_more and next_cursor:
+                    # Stopped early: report that more remain and where to resume.
+                    return {
+                        "comments": all_comments,
+                        "has_more": True,
+                        "cursor": next_cursor,
+                        "total_fetched": len(all_comments),
+                        "pages_fetched": pages,
+                    }
+                break
+
             if not has_more or not next_cursor:
                 break
             cursor = next_cursor

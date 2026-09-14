@@ -27,14 +27,18 @@ def structured_output_options(command: Callable) -> Callable:
     return command
 
 
-def compact_output_option(command: Callable) -> Callable:
+def compact_output_option(command: Callable | None = None, *, help: str | None = None) -> Callable:
     """Add a --compact option for whitelist-projected structured output."""
-    return click.option(
+    option = click.option(
         "--compact",
         is_flag=True,
-        help="Trim structured output to essential fields "
+        help=help
+        or "Trim structured output to essential fields "
         "(note_id, xsec_token, title, author, liked, note_type, pagination).",
-    )(command)
+    )
+    if command is None:
+        return option
+    return option(command)
 
 
 def _cookie_source(ctx) -> str:

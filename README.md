@@ -14,10 +14,11 @@ A CLI for Xiaohongshu (小红书) — search, read, interact, and post via rever
 
 - **A. 列表命令 `--compact`**：覆盖 `search` / `feed` / `hot` / `user-posts` / `favorites` / `likes` / `my-notes`。开启后结构化输出改走白名单投影，每条笔记只保留 `note_id`、`xsec_token`（下游 `xhs read` 依赖）、`title`、`author`、`liked`、`note_type`；`search` / `feed` 附带 `has_more`，`user-posts` / `favorites` / `likes` / `my-notes` 附带 `has_more` + `cursor`（翻页凭据）。列表投影先按 `model_type` 分流（hb.2 起）：`note` 条目走白名单投影；`hot_query` 条目（搜索响应里混在 `data.items` 中的「大家都在搜」热词块，内层键为 `hot_query`，形如 `{title, source, queries: [{name, search_word, cover, id}, ...]}`）提取为顶层 `hot_queries` 数组原样透传，每次搜索可能有 1~2 条，无热词时该字段不出现；其余未知 `model_type` 条目（广告位等）直接丢弃——它们不是笔记，套用笔记白名单只会产出 title/author/liked 全空、`note_id` 为 `<uuid>#<timestamp>` 请求 id 的空壳行（hb.1 实测缺陷），原样透传又有泄露大块未知结构的风险。
 - **B. 精读命令 `read --no-media` / `--fields`**：`--no-media` 只剥离媒体字段（`image_list` / `cover` / `stream` / `live_photo`，含视频 h264/h265/av1 多档 URL），其余原样保留；`--fields a,b,c` 语义为「先 `--no-media`，再按逗号白名单精确取字段」，两者可叠加。调研常用白名单：`note_id,title,desc,user,time,interact_info,tag_list`。
+- **C. 评论命令 `comments` / `sub-comments` `--compact` / `--limit N`**（hb.3 起）：`--compact` 走评论白名单投影——顶层保留 `comments` / `cursor` / `has_more`（`--all` 聚合路径另有 `total_fetched` / `pages_fetched`）；单条评论保留 `id`、`note_id`、`content`、`like_count`、`liked`、`ip_location`、`create_time`、`is_author` / `is_pinned`（由 `show_tags` 布尔化，未知 tag 一律忽略）、`sub_comment_count`、`sub_comment_cursor`、`sub_comment_has_more`、`user_info{nickname,user_id}`、`at_users`（昵称列表）、`target_comment{id,nickname}`（存在才出现）；丢弃 `user_info.avatar` / `user_info.xsec_token`、`show_tags` 原始数组、内嵌 `sub_comments` 层、`pictures`、`status`、`invalid`。`--limit N`（正整数，`N <= 0` 报错）限制顶层评论条数：单页模式只截当前页前 N 条且 `cursor` / `has_more` 原样透传（可继续翻页）；配合 `--all` 时达到 N 条即**提前停止翻页**（少发请求），并透传可续翻的 `cursor` / `has_more`。
 
 与上游同步方式：`git fetch upstream && git rebase upstream/main`。
 
-Tag 语义：`v<上游版本>-hb.<自有迭代号>`（如 `v0.6.4-hb.2` 表示基于上游 v0.6.4 的第 2 次自有迭代）。迭代记录：hb.1 新增 `--compact` / `--no-media` / `--fields`；hb.2 修复 `--compact` 投影——按 `model_type` 分流列表条目，正确透传「大家都在搜」热词块（顶层 `hot_queries`），并不再产出空壳笔记行。
+Tag 语义：`v<上游版本>-hb.<自有迭代号>`（如 `v0.6.4-hb.2` 表示基于上游 v0.6.4 的第 2 次自有迭代）。迭代记录：hb.1 新增 `--compact` / `--no-media` / `--fields`；hb.2 修复 `--compact` 投影——按 `model_type` 分流列表条目，正确透传「大家都在搜」热词块（顶层 `hot_queries`），并不再产出空壳笔记行；hb.3 新增 `comments` / `sub-comments` 的 `--compact` / `--limit N`（`--all --limit` 提前停翻页）。
 
 ## More Tools
 
@@ -97,6 +98,8 @@ xhs comments 1                         # Read comments for the 1st result from t
 xhs comments "<url>"                   # View comments — paste URL to cache/reuse xsec_token
 xhs comments "<url>" --all             # Fetch ALL comments (auto-paginate all pages)
 xhs comments "<url>" --all --json      # All comments as JSON
+xhs comments "<url>" --compact         # Compact comment fields (drops avatar/pictures/embedded replies)
+xhs comments "<url>" --all --limit 100 # Stop auto-pagination once 100 comments are fetched
 xhs comments <note_id> --xsec-token T  # Use note_id + explicit xsec_token
 xhs comments <note_id>                 # Reuse cached token if available
 xhs sub-comments <note_id> <cmt_id>   # View replies to a comment
@@ -390,6 +393,8 @@ xhs comments 1                         # 查看最近一次列表里的第 1 条
 xhs comments "<url>"                   # 查看评论 — 粘贴 URL 以缓存/复用 xsec_token
 xhs comments "<url>" --all             # 获取全部评论（自动翻页）
 xhs comments "<url>" --all --json      # 全部评论，JSON 格式
+xhs comments "<url>" --compact         # 精简评论字段（丢弃头像/图片/内嵌楼中楼）
+xhs comments "<url>" --all --limit 100 # 取满 100 条即提前停止翻页
 xhs comments <note_id> --xsec-token T  # 用 note_id + 显式 xsec_token
 xhs comments <note_id>                 # 如果之前访问过 URL，会复用缓存 token
 xhs sub-comments <note_id> <cmt_id>   # 查看评论的回复

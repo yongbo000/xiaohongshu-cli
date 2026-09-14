@@ -297,6 +297,84 @@ def strip_note_media(data: Any) -> Any:
     return _strip_keys(data, _NOTE_MEDIA_KEYS)
 
 
+# Confirmed show_tags values for comments. Only "is_author" has been verified
+# against real API samples; the pinned-comment tag name is still unconfirmed,
+# so the pinned set stays empty — unknown tags are ignored (never passed
+# through) and is_pinned stays False until the tag name is verified.
+_COMMENT_AUTHOR_TAG = "is_author"
+_COMMENT_PINNED_TAGS: frozenset[str] = frozenset()
+
+_COMMENT_PASSTHROUGH_KEYS = (
+    "id",
+    "note_id",
+    "content",
+    "like_count",
+    "liked",
+    "ip_location",
+    "create_time",
+)
+
+
+def _compact_comment(comment: Any) -> Any:
+    """Whitelist projection of one comment (shared by comments/sub-comments)."""
+    if not isinstance(comment, dict):
+        return comment
+    show_tags = comment.get("show_tags")
+    if not isinstance(show_tags, list):
+        show_tags = []
+
+    projected: dict[str, Any] = {key: comment[key] for key in _COMMENT_PASSTHROUGH_KEYS if key in comment}
+    projected["is_author"] = _COMMENT_AUTHOR_TAG in show_tags
+    projected["is_pinned"] = any(tag in _COMMENT_PINNED_TAGS for tag in show_tags)
+    for key in ("sub_comment_count", "sub_comment_cursor", "sub_comment_has_more"):
+        if key in comment:
+            projected[key] = comment[key]
+
+    user = comment.get("user_info")
+    if isinstance(user, dict):
+        projected["user_info"] = {key: user[key] for key in ("nickname", "user_id") if key in user}
+
+    if "at_users" in comment:
+        at_users = comment.get("at_users")
+        projected["at_users"] = (
+            [u.get("nickname", "") for u in at_users if isinstance(u, dict)]
+            if isinstance(at_users, list)
+            else []
+        )
+
+    target = comment.get("target_comment")
+    if isinstance(target, dict):
+        target_user = target.get("user_info")
+        projected["target_comment"] = {
+            "id": target.get("id", ""),
+            "nickname": target_user.get("nickname", "") if isinstance(target_user, dict) else "",
+        }
+
+    return projected
+
+
+def compact_comments(data: Any) -> Any:
+    """Whitelist projection of comments/sub-comments responses for --compact.
+
+    Keeps pagination tokens (cursor / has_more, plus the --all aggregate's
+    total_fetched / pages_fetched) and projects each comment to the whitelist;
+    drops embedded sub_comments, pictures, avatar/xsec_token, show_tags,
+    status and invalid.
+    """
+    if not isinstance(data, dict):
+        return data
+    comments = data.get("comments", [])
+    projected: dict[str, Any] = {
+        "comments": [_compact_comment(comment) for comment in comments] if isinstance(comments, list) else [],
+        "cursor": data.get("cursor", ""),
+        "has_more": bool(data.get("has_more", False)),
+    }
+    for key in ("total_fetched", "pages_fetched"):
+        if key in data:
+            projected[key] = data[key]
+    return projected
+
+
 def pick_note_fields(data: Any, fields: list[str]) -> Any:
     """Keep only whitelisted note fields after stripping media (read --fields).
 
