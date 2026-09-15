@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 
+from . import risk_marks, risk_state
 from .client_mixins import (
     AuthEndpointsMixin,
     CreatorEndpointsMixin,
@@ -53,11 +54,16 @@ class XhsClient(
         timeout: float = 30.0,
         request_delay: float = 1.0,
         max_retries: int = 3,
+        enforce_cooldown: bool = True,
     ):
         self.cookies = cookies
         self._http = httpx.Client(timeout=timeout, follow_redirects=True)
-        self._request_delay = request_delay
-        self._base_request_delay = request_delay
+        self._enforce_cooldown = enforce_cooldown
+        # Restore the persisted delay escalation so a restarted process does
+        # not come back at full speed right after a captcha (D3).
+        multiplier = risk_state.load_risk_state().get("delay_multiplier", 1.0)
+        self._request_delay = request_delay * multiplier
+        self._base_request_delay = request_delay * multiplier
         self._max_retries = max_retries
         self._last_request_time = 0.0
         self._verify_count = 0
@@ -111,6 +117,11 @@ class XhsClient(
     def _handle_response(self, resp: httpx.Response) -> Any:
         if resp.status_code in (461, 471):
             self._verify_count += 1
+            # Persist the captcha so the cooldown and escalation survive
+            # process/gateway restarts (D3), and self-mark the resource that
+            # triggered it (D2).
+            risk_state.record_captcha()
+            risk_marks.mark_current_resource(reason=f"http_{resp.status_code}")
             cooldown = min(30, 5 * (2 ** (self._verify_count - 1)))
             logger.warning(
                 "Captcha triggered (count=%d), cooling down %.0fs before raising",
@@ -158,6 +169,17 @@ class XhsClient(
             self.cookies[name] = value
 
     def _request_with_retry(self, method: str, url: str, **kwargs) -> httpx.Response:
+        if self._enforce_cooldown:
+            # Fast-fail while a persisted cooldown is active: zero upstream
+            # requests until cooldown_until (re-read from disk so gateway
+            # extensions are honored) has passed.
+            remaining = risk_state.cooldown_remaining()
+            if remaining > 0:
+                logger.warning(
+                    "Risk cooldown active (%.0fs remaining), failing fast without upstream request",
+                    remaining,
+                )
+                raise NeedVerifyError(verify_type="cooldown", verify_uuid="risk_state")
         self._rate_limit_delay()
         last_exc: Exception | None = None
 

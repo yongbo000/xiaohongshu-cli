@@ -136,6 +136,7 @@ Payloads live under `.data`.
 | `xhs status` | Check authentication status |
 | `xhs logout` | Clear cached cookies |
 | `xhs whoami` | Show current user profile |
+| `xhs fingerprint-reset` | Rotate the persisted device fingerprint and signing session (local state only) |
 
 ## Agent Workflow Examples
 
@@ -243,8 +244,10 @@ Structured error codes returned in the `error.code` field:
 
 - **Do NOT parallelize requests** — the built-in rate-limit delay exists for account safety
 - **Captcha recovery**: if `NeedVerifyError` occurs, the client auto-cools-down with increasing delays (5s→10s→20s→30s). Ask the user to complete captcha in browser before retrying
+- **Persistent cooldown**: captcha events are recorded in `~/.xiaohongshu-cli/risk_state.json` with escalating cooldown tiers (45min → 4h → 24h). While the cooldown is active, every command fails fast with `verification_required` and makes **zero upstream requests** — do not retry until `cooldown_until` has passed; repeated captchas within 24h risk a permanent account block
+- **Resource marks**: notes/keywords/comments that triggered a captcha are blacklisted in `~/.xiaohongshu-cli/risk_marks.json` (shared with the gateway). `search` / `read` / `comments` / `sub-comments` fast-fail with `verification_required` for marked resources until the mark's TTL expires
 - **Batch operations**: when doing bulk work (e.g., reading many notes), add `time.sleep()` between CLI calls
-- **Session stability**: all requests in a session share a consistent browser fingerprint. Restarting the CLI creates a new fingerprint session
+- **Session stability**: all requests share one persistent device fingerprint and signing session, stored in `~/.xiaohongshu-cli/fingerprint.json`. Restarting the CLI keeps the same identity; rotate it explicitly with `xhs fingerprint-reset` (it also rotates automatically on login/cookie refresh)
 
 ## Safety Notes
 

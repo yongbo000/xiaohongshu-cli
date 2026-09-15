@@ -38,7 +38,7 @@ Tag 语义：`v<上游版本>-hb.<自有迭代号>`（如 `v0.6.4-hb.2` 表示�
 - 👍 **Interactions** — like, favorite, comment, reply, delete
 - ✍️ **Creator** — post image notes, my-notes list, delete
 - 🔔 **Notifications** — unread count, mentions, likes, new followers
-- 🛡️ **Anti-detection** — consistent macOS Chrome fingerprint, `sec-ch-ua` alignment, session-stable browser identity, Gaussian jitter, captcha cooldown, exponential backoff
+- 🛡️ **Anti-detection** — consistent macOS Chrome fingerprint, `sec-ch-ua` alignment, persistent device identity (disk-backed fingerprint + signing session), Gaussian jitter, persistent captcha cooldown with fast-fail, exponential backoff
 - 📊 **Structured output** — commands support `--yaml` and `--json`; non-TTY stdout defaults to YAML
 - 📦 **Stable envelope** — see [SCHEMA.md](./SCHEMA.md) for `ok/schema_version/data/error`
 
@@ -81,6 +81,7 @@ xhs status                            # Check login status
 xhs whoami                            # Detailed profile (fans, likes, etc)
 xhs whoami --json                     # Structured JSON envelope
 xhs logout                            # Clear saved cookies
+xhs fingerprint-reset                 # Rotate persisted device fingerprint + signing session (local state only)
 
 # ─── Search ───────────────────────────────────────
 xhs search "美食"                      # Search notes
@@ -199,12 +200,30 @@ xiaohongshu-cli includes comprehensive anti-risk-control measures designed to mi
 
 ### Browser Fingerprint Consistency
 - **UA/Platform alignment**: User-Agent, `sec-ch-ua`, `sec-ch-ua-platform`, and fingerprint fields are all consistent (macOS Chrome 145)
-- **Session-stable identity**: GPU, screen resolution, CPU cores, and other hardware fingerprint values are generated once per session and reused across all requests (real browsers don't change hardware mid-session)
+- **Persistent device identity**: the hardware fingerprint (GPU, screen resolution, CPU cores, memory, canvas hash, ...) is generated once, persisted to `~/.xiaohongshu-cli/fingerprint.json` (0600), and reused by every process; only per-request dynamic fields (timestamp, cookie string) are refreshed. Upstream xhshow regenerated a random fingerprint on *every* request — the fork overrides this (see "xhshow upgrade checkpoints" below)
+- **Continuous signing session**: the `SessionManager` counters (`page_load_timestamp` / `sequence_value` / `window_props_length`) are persisted in the same file, so a restarted process continues the previous session instead of starting a brand-new one
+- **Rotation**: the fingerprint rotates automatically when fresh cookies are saved (login / cookie refresh = new identity), or explicitly via `xhs fingerprint-reset` (or deleting `fingerprint.json`)
 - **macOS-native values**: GPU vendors (Apple M1/M2/M3, Intel Iris), Retina screen resolutions, `MacIntel` platform — all matching a real macOS browser
 
 ### Captcha Cooldown
 - **Progressive backoff**: On captcha trigger (HTTP 461/471), automatically sleeps 5→10→20→30 seconds with increasing delays
-- **Adaptive rate limiting**: Request delay is permanently doubled after a captcha event to reduce future risk
+- **Adaptive rate limiting**: Request delay is permanently doubled after a captcha event to reduce future risk; the escalation multiplier is persisted and re-applied after restarts
+- **Persistent cooldown (fail-fast)**: captcha events are recorded in `~/.xiaohongshu-cli/risk_state.json` (0600) with escalating cooldown tiers (45min → 4h → 24h within a 24h window). While `cooldown_until` is in the future, commands fail fast with the `verification_required` envelope — **zero upstream requests**, including the first request after a process/gateway restart. The gateway may also write `cooldown_until` into this file; both sides honor the later value
+- **Resource marks**: resources that triggered a captcha (note ID, search keyword, comment ID) are recorded in `~/.xiaohongshu-cli/risk_marks.json`. Read-only commands (`search` / `read` / `comments` / `sub-comments`) fast-fail with `verification_required` when the target has an active mark. See [SCHEMA.md](./SCHEMA.md) for both file schemas
+
+### Risk State Files
+
+All files live under `~/.xiaohongshu-cli/` with 0600 permissions; missing or corrupt files silently degrade to defaults (normal requests), never breaking functionality:
+
+| File | Purpose | Writers |
+|------|---------|---------|
+| `risk_state.json` | Account-level captcha history, cooldown deadline, delay escalation | CLI (on captcha), gateway (`cooldown_until`) |
+| `risk_marks.json` | Resource-level risk marks (note/keyword/comment blacklist) | gateway (primary), CLI (self-mark on captcha) |
+| `fingerprint.json` | Device fingerprint + signing-session counters | CLI (auto) |
+
+### xhshow Upgrade Checkpoints
+
+The fingerprint/session persistence overrides xhshow internals. After bumping the `xhshow` dependency, verify the checkpoints listed in `xhs_cli/fingerprint_store.py` (the monkeypatch point `xhshow.core.common_sign.FingerprintGenerator`, the `SessionManager` attribute contract, and `REQUIRED_FP_KEYS` vs `generate_b1`).
 
 ### Signed Requests
 - All API calls use `x-s` / `x-s-common` / `x-t` signatures (reverse-engineered from web client)
@@ -265,7 +284,7 @@ xhs_cli/
 ├── formatter.py        # Output formatting, schema envelope, Rich rendering
 └── commands/
     ├── _common.py      # Shared CLI helpers (structured_output_options, etc.)
-    ├── auth.py         # login/logout/status/whoami
+    ├── auth.py         # login/logout/status/whoami/fingerprint-reset
     ├── reading.py      # search/read/comments/user/feed/hot/topics/search-user
     ├── interactions.py  # like/favorite/comment/reply/delete-comment
     ├── social.py       # follow/unfollow/favorites
@@ -338,7 +357,7 @@ The built-in Gaussian jitter delay (~1-1.5s between requests) is intentional to 
 - 👍 **互动** — 点赞、收藏、评论、回复、删除
 - ✍️ **创作者** — 发布图文笔记、我的笔记列表、删除
 - 🔔 **通知** — 未读数、@、点赞、新关注
-- 🛡️ **反风控** — macOS Chrome 指纹一致性、session 级浏览器身份持久化、高斯抖动延迟、验证码自动冷却、指数退避重试
+- 🛡️ **反风控** — macOS Chrome 指纹一致性、设备身份落盘持久化（指纹 + 签名会话跨进程复用）、高斯抖动延迟、验证码冷却落盘并在冷却期快速失败、指数退避重试
 - 📊 **结构化输出** — `--yaml` / `--json`，非 TTY 默认输出 YAML
 - 📦 **稳定 envelope** — 参见 [SCHEMA.md](./SCHEMA.md)
 
@@ -378,6 +397,7 @@ xhs login --qrcode                    # browser-assisted 二维码扫码登录�
 xhs status                            # 检查登录状态
 xhs whoami                            # 查看用户资料
 xhs logout                            # 清除缓存的 Cookie
+xhs fingerprint-reset                 # 轮换落盘的设备指纹与签名会话（仅本地状态）
 
 # 搜索
 xhs search "美食"                      # 搜索笔记

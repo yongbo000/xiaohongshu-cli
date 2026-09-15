@@ -155,6 +155,21 @@ def logout(ctx, as_json: bool, as_yaml: bool):
         print_success("Logged out — cookies cleared")
 
 
+@click.command("fingerprint-reset")
+@structured_output_options
+@click.pass_context
+def fingerprint_reset(ctx, as_json: bool, as_yaml: bool):
+    """Rotate the persisted device fingerprint and signing session (local state only)."""
+    from ..fingerprint_store import reset_state
+
+    reset_state()
+    if not _emit_payload({"fingerprint_reset": True}, as_json=as_json, as_yaml=as_yaml):
+        print_success(
+            "Fingerprint and signing-session state cleared — "
+            "a new device fingerprint is generated on next use"
+        )
+
+
 @click.command()
 @structured_output_options
 @click.pass_context

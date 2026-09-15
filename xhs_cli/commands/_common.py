@@ -7,10 +7,12 @@ from typing import Any, TypeVar
 
 import click
 
+from .. import risk_state
 from ..client import XhsClient
 from ..cookies import get_cookies
 from ..error_codes import error_code_for_exception
 from ..exceptions import (
+    NeedVerifyError,
     NoCookieError,
     SessionExpiredError,
     XhsApiError,
@@ -51,8 +53,21 @@ def get_client(ctx, *, force_refresh: bool = False) -> XhsClient:
     return XhsClient(cookies)
 
 
+def _fail_fast_if_cooling_down() -> None:
+    """Block any authenticated action while a persisted risk cooldown is active.
+
+    Guarantees the first request after a process/gateway restart does not hit
+    the upstream API during a captcha cooldown (D3). Surfaces as the existing
+    ``verification_required`` error envelope.
+    """
+    remaining = risk_state.cooldown_remaining()
+    if remaining > 0:
+        raise NeedVerifyError(verify_type="cooldown", verify_uuid="risk_state")
+
+
 def run_client_action(ctx, action: Callable[[XhsClient], T]) -> T:
     """Run an authenticated client action and retry once with fresh browser cookies."""
+    _fail_fast_if_cooling_down()
     try:
         with get_client(ctx) as client:
             return action(client)

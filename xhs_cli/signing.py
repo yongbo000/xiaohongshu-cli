@@ -12,9 +12,14 @@ Public API (unchanged from previous implementation):
 
 from __future__ import annotations
 
+import time
+
 from xhshow import CryptoConfig, SessionManager, Xhshow
+from xhshow.core import common_sign as _common_sign
+from xhshow.generators.fingerprint import FingerprintGenerator
 from xhshow.utils.url_utils import extract_uri  # noqa: F401 — re-export
 
+from . import fingerprint_store
 from .constants import APP_ID, PLATFORM, SDK_VERSION, USER_AGENT
 
 # ─── macOS/Chrome configuration ────────────────────────────────────────────
@@ -47,7 +52,64 @@ _config = CryptoConfig().with_overrides(
 )
 
 _xhshow = Xhshow(_config)
-_session = SessionManager(_config)
+
+
+# ─── Persistent fingerprint & session (D1a) ────────────────────────────────
+# xhshow 0.1.9 regenerates the hardware fingerprint on every request and keeps
+# SessionManager counters in memory only. The overrides below make both
+# persistent across processes. See fingerprint_store.py for the xhshow-upgrade
+# checklist that keeps these patches valid.
+
+
+class PersistentFingerprintGenerator(FingerprintGenerator):
+    """Reuse the fingerprint persisted on disk instead of randomizing per request."""
+
+    def generate(self, cookies: dict, user_agent: str) -> dict:
+        fp = fingerprint_store.load_fingerprint()
+        if fp is None:
+            fp = super().generate(cookies, user_agent)
+            fingerprint_store.save_fingerprint(fp)
+            return fp
+        # Refresh per-request dynamic fields, mirroring FingerprintGenerator.update().
+        fp["x1"] = user_agent
+        fp["x39"] = 0
+        fp["x44"] = f"{int(time.time() * 1000)}"
+        fp["x57"] = "; ".join(f"{k}={v}" for k, v in cookies.items())
+        return fp
+
+
+# XsCommonSigner instantiates FingerprintGenerator via this module-level name.
+_common_sign.FingerprintGenerator = PersistentFingerprintGenerator
+
+
+class PersistentSessionManager(SessionManager):
+    """SessionManager whose counters survive process restarts."""
+
+    def __init__(self, config: CryptoConfig | None = None):
+        super().__init__(config)
+        self._restored = False
+
+    def _restore(self) -> None:
+        if self._restored:
+            return
+        self._restored = True
+        saved = fingerprint_store.load_session()
+        if saved:
+            self.page_load_timestamp = saved["page_load_timestamp"]
+            self.sequence_value = saved["sequence_value"]
+            self.window_props_length = saved["window_props_length"]
+
+    def update_state(self):
+        self._restore()
+        super().update_state()
+        fingerprint_store.save_session(
+            self.page_load_timestamp,
+            self.sequence_value,
+            self.window_props_length,
+        )
+
+
+_session = PersistentSessionManager(_config)
 
 
 # ─── Public API ─────────────────────────────────────────────────────────────

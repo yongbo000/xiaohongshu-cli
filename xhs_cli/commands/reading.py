@@ -4,6 +4,7 @@ from functools import partial
 
 import click
 
+from .. import risk_marks
 from ..command_normalizers import normalize_paged_notes
 from ..cookies import cache_note_context
 from ..formatter import (
@@ -91,6 +92,10 @@ TYPE_MAP = {
 def search(ctx, keyword: str, sort: str, note_type: str, page: int, compact: bool, as_json: bool, as_yaml: bool):
     """Search notes by keyword."""
     def _search_action(client):
+        # Fast-fail on an active risk mark, and track the keyword so a
+        # captcha triggered here self-marks it (D2).
+        risk_marks.set_current_resource(risk_marks.KIND_KEYWORD, keyword)
+        risk_marks.guard([(risk_marks.KIND_KEYWORD, keyword)])
         result = client.search_notes(
             keyword=keyword,
             page=page,
@@ -145,6 +150,8 @@ def read(ctx, id_or_url: str, xsec_token: str, no_media: bool, fields: str | Non
         project = strip_note_media
 
     def _read_action(client):
+        risk_marks.set_current_resource(risk_marks.KIND_NOTE, note_id)
+        risk_marks.guard([(risk_marks.KIND_NOTE, note_id)])
         kwargs = {"xsec_token": token}
         if url_source:
             kwargs["xsec_source"] = url_source
@@ -199,6 +206,8 @@ def comments(
         cache_note_context(note_id, token, xsec_source)
 
     def _load_comments(client):
+        risk_marks.set_current_resource(risk_marks.KIND_NOTE, note_id)
+        risk_marks.guard([(risk_marks.KIND_NOTE, note_id)])
         common_kwargs = {"xsec_token": token}
         if url_source:
             common_kwargs["xsec_source"] = url_source
@@ -345,6 +354,11 @@ def sub_comments(
         raise click.UsageError("--limit must be a positive integer.")
 
     def _sub_comments_action(client):
+        risk_marks.set_current_resource(risk_marks.KIND_COMMENT, comment_id, note_id=note_id)
+        risk_marks.guard([
+            (risk_marks.KIND_COMMENT, comment_id),
+            (risk_marks.KIND_NOTE, note_id),
+        ])
         data = client.get_sub_comments(note_id, comment_id, cursor=cursor)
         return _apply_comment_limit(data, limit)
 

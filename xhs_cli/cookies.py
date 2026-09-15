@@ -71,6 +71,14 @@ def save_cookies(cookies: dict[str, str]) -> None:
     cookie_path.write_text(json.dumps(payload, indent=2))
     cookie_path.chmod(0o600)
     logger.debug("Saved cookies to %s", cookie_path)
+    # Fresh cookies = new identity: rotate the persisted device fingerprint
+    # and signing session (D1a). Best-effort — never break cookie saving.
+    try:
+        from .fingerprint_store import reset_state
+
+        reset_state()
+    except Exception as exc:
+        logger.debug("Failed to rotate fingerprint state: %s", exc)
 
 
 def clear_cookies() -> None:

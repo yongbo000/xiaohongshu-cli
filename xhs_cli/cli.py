@@ -1,7 +1,7 @@
 """CLI entry point for xiaohongshu-cli.
 
 Usage:
-    xhs login / status / logout
+    xhs login / status / logout / fingerprint-reset
     xhs search <keyword> [--sort popular|latest] [--type video|image] [--page N]
     xhs read <id_or_url> [--xsec-token TOKEN]
     xhs comments <id_or_url>
@@ -74,6 +74,7 @@ cli.add_command(auth.login)
 cli.add_command(auth.status)
 cli.add_command(auth.logout)
 cli.add_command(auth.whoami)
+cli.add_command(auth.fingerprint_reset)
 
 # ─── Reading commands ────────────────────────────────────────────────────────
 
