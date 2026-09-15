@@ -19,7 +19,7 @@ from xhs_cli.formatter_utils import success_payload
 runner = CliRunner()
 
 ITEM_WHITELIST = {"note_id", "xsec_token", "title", "author", "liked", "note_type"}
-MEDIA_KEYS = {"image_list", "cover", "stream", "live_photo"}
+MEDIA_KEYS = {"image_list", "cover", "stream", "live_photo", "video"}
 
 _LONG = "x" * 120
 
@@ -46,6 +46,23 @@ def _stream() -> dict:
         }]
 
     return {"h264": entry("h264"), "h265": entry("h265"), "av1": entry("av1")}
+
+
+def _media_v2() -> dict:
+    def bitrate_entry(codec: str, quality: str) -> dict:
+        return {
+            "master_url": f"https://sns-video.example.com/{codec}/{quality}/master.mp4?{_LONG}",
+            "backup_urls": [f"https://sns-video.example.com/{codec}/{quality}/backup.mp4?{_LONG}"],
+            "duration": 15000,
+            "quality_type": quality,
+            "opaque1": f"opaque-{codec}-{quality}-{_LONG}",
+        }
+
+    return {
+        "h264": [bitrate_entry("h264", q) for q in ("hd", "sd")],
+        "h265": [bitrate_entry("h265", q) for q in ("hd", "sd")],
+        "av1": [bitrate_entry("av1", q) for q in ("hd", "sd")],
+    }
 
 
 SEARCH_RESPONSE = {
@@ -218,7 +235,22 @@ NOTE_DETAIL_RESPONSE = {
                 "cover": {"url_default": f"https://sns-img.example.com/cover.jpg?{_LONG}", "file_id": "cover-file"},
                 "video": {
                     "consumer": {"origin_video_key": "origin-key"},
-                    "media": {"stream": _stream()},
+                    "capa": {"duration": 15},
+                    "media_v2": _media_v2(),
+                    "media": {
+                        "stream": _stream(),
+                        "video": {
+                            "fileid": f"video-file-{_LONG}",
+                            "duration": 15000,
+                            "width": 1080,
+                            "height": 1920,
+                        },
+                        "image": {
+                            "first_frame_fileid": f"frame-file-{_LONG}",
+                            "thumbnail_fileid": f"thumb-file-{_LONG}",
+                            "url_default": f"https://sns-img.example.com/first-frame.jpg?{_LONG}",
+                        },
+                    },
                 },
             },
         }
@@ -477,8 +509,25 @@ class TestReadTrimming:
         note = data["items"][0]["note_card"]
         assert note["title"] == "精读笔记标题"
         assert note["desc"] == "正文内容"
-        assert note["video"]["consumer"]["origin_video_key"] == "origin-key"
+        assert "video" not in note
+        assert note["user"] == NOTE_DETAIL_RESPONSE["items"][0]["note_card"]["user"]
+        assert note["interact_info"] == NOTE_DETAIL_RESPONSE["items"][0]["note_card"]["interact_info"]
         assert data["items"][0]["xsec_token"] == "token-1"
+
+    def test_no_media_strips_video_subtree_and_shrinks_payload(self, monkeypatch):
+        client = _ReadClient(NOTE_DETAIL_RESPONSE)
+        result = _invoke(monkeypatch, client, ["read", "note-1", "--no-media", "--json"])
+        data = _json_payload(result)["data"]
+
+        assert not _contains_any_key(data, MEDIA_KEYS | {"media_v2"})
+        note = data["items"][0]["note_card"]
+        for key in ("title", "desc", "user", "interact_info", "tag_list", "time"):
+            assert key in note
+        assert data["items"][0]["id"] == "note-1"
+
+        full = len(json.dumps(NOTE_DETAIL_RESPONSE, ensure_ascii=False))
+        trimmed = len(json.dumps(data, ensure_ascii=False))
+        assert trimmed < full // 2
 
     def test_no_media_keeps_everything_else(self, monkeypatch):
         client = _ReadClient(FLAT_NOTE_RESPONSE)

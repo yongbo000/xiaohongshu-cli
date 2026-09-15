@@ -194,7 +194,12 @@ def normalize_notifications(data: dict[str, Any]) -> list[dict[str, Any]]:
 # pagination tokens (has_more / cursor / xsec_token) downstream paging needs.
 
 # Media fields stripped by read --no-media (also implied by --fields).
-_NOTE_MEDIA_KEYS = frozenset({"image_list", "cover", "stream", "live_photo"})
+# "video" drops the whole video-note subtree (media_v2 bitrate ladders with
+# opaque1 blobs, media.video fileid, media.image first-frame thumbnails,
+# consumer, capa) — live samples showed it alone wastes tens of KB per note.
+# "media_v2" is depth defense in case a future API promotes it to the
+# note_card top level.
+_NOTE_MEDIA_KEYS = frozenset({"image_list", "cover", "stream", "live_photo", "video", "media_v2"})
 
 
 def _split_list_items(data: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
