@@ -119,6 +119,42 @@ class TestPersistentGenerators:
         assert manager.sequence_value > 0
 
 
+class TestXhshowCompat:
+    """Guards for the xhshow patch points listed in fingerprint_store.py.
+
+    These fail loudly when an xhshow upgrade breaks the assumptions the
+    monkeypatches rely on (last verified against xhshow 0.2.0).
+    """
+
+    def test_monkeypatch_point_still_effective(self):
+        from xhshow.core import common_sign
+
+        assert common_sign.FingerprintGenerator is PersistentFingerprintGenerator
+
+    def test_session_manager_attribute_contract(self):
+        from xhshow import SessionManager
+
+        manager = SessionManager(_config)
+        for attr in ("page_load_timestamp", "sequence_value", "window_props_length"):
+            assert isinstance(getattr(manager, attr), int), attr
+
+    def test_required_fp_keys_cover_generate_b1(self):
+        from xhshow.generators.fingerprint import FingerprintGenerator
+
+        gen = FingerprintGenerator(_config)
+        fp = gen.generate({"a1": "a" * 48}, "UA-test")
+        # generate_b1 must succeed given ONLY the required keys — any key it
+        # reads beyond REQUIRED_FP_KEYS raises KeyError here.
+        b1 = gen.generate_b1({k: fp[k] for k in fingerprint_store.REQUIRED_FP_KEYS})
+        assert isinstance(b1, str) and b1
+
+    def test_fresh_fingerprint_contains_required_keys(self):
+        from xhshow.generators.fingerprint import FingerprintGenerator
+
+        fp = FingerprintGenerator(_config).generate({"a1": "a" * 48}, "UA-test")
+        assert fingerprint_store.REQUIRED_FP_KEYS <= set(fp.keys())
+
+
 class TestCrossProcessStability:
     def test_fingerprint_and_session_stable_across_processes(self, tmp_path):
         """Acceptance: two separate process invocations share one fingerprint

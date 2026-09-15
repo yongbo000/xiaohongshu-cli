@@ -26,12 +26,55 @@ Usage:
 from __future__ import annotations
 
 import logging
+import re
 import sys
+from typing import Any
 
 import click
 
 from . import __version__
 from .commands import auth, creator, interactions, notifications, reading, social
+
+
+class HintGroup(click.Group):
+    """Group that tells you which subcommands DO support an unknown option.
+
+    Click aborts the whole invocation with a bare ``No such option`` error,
+    which leaves calling agents unable to tell whether the flag exists at all.
+    When that happens, append a hint naming the subcommands that accept it.
+    """
+
+    def invoke(self, ctx: click.Context) -> Any:
+        try:
+            return super().invoke(ctx)
+        except click.UsageError as exc:
+            _add_option_hint(exc, self)
+            raise
+
+
+_NO_SUCH_OPTION_RE = re.compile(r"No such option: (--[\w-]+)")
+
+
+def _add_option_hint(exc: click.UsageError, group: click.Group) -> None:
+    match = _NO_SUCH_OPTION_RE.search(exc.message or "")
+    if not match:
+        return
+    option = match.group(1)
+    supported = sorted(
+        name
+        for name, cmd in group.commands.items()
+        if any(
+            isinstance(param, click.Option) and option in param.opts + param.secondary_opts
+            for param in cmd.params
+        )
+    )
+    if not supported:
+        return
+    exc.message += (
+        f"\nHint: {option} is not supported by this command; "
+        f"it is available on: {', '.join(supported)}. "
+        "Run 'xhs <command> --help' to list a command's options."
+    )
 
 
 def _fix_windows_encoding() -> None:
@@ -46,7 +89,7 @@ def _fix_windows_encoding() -> None:
 _fix_windows_encoding()
 
 
-@click.group()
+@click.group(cls=HintGroup)
 @click.version_option(version=__version__, prog_name="xhs")
 @click.option("-v", "--verbose", is_flag=True, help="Enable debug logging")
 @click.option(

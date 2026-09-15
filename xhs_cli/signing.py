@@ -4,8 +4,11 @@ Main API signing for edith.xiaohongshu.com
 Thin adapter over the xhshow library, configured for macOS/Chrome.
 Maintains a persistent SessionManager for realistic session simulation.
 
-Public API (unchanged from previous implementation):
-  - sign_main_api(method, uri, cookies, ...) -> dict of 5 headers
+Public API:
+  - sign_main_api(method, uri, cookies, ...) -> dict of signing headers.
+    Always contains x-s, x-s-common, x-t, x-b3-traceid, x-xray-traceid;
+    xhshow 0.2.0 additionally emits x-mns and xy-direction, which are passed
+    through unchanged (they mirror the current web client's header set).
   - build_get_uri(uri, params) -> str
   - extract_uri(url) -> str
 """
@@ -55,8 +58,8 @@ _xhshow = Xhshow(_config)
 
 
 # ─── Persistent fingerprint & session (D1a) ────────────────────────────────
-# xhshow 0.1.9 regenerates the hardware fingerprint on every request and keeps
-# SessionManager counters in memory only. The overrides below make both
+# xhshow regenerates the hardware fingerprint on every request (verified for
+# 0.1.9 and 0.2.0) and keeps SessionManager counters in memory only. The overrides below make both
 # persistent across processes. See fingerprint_store.py for the xhshow-upgrade
 # checklist that keeps these patches valid.
 
@@ -126,7 +129,8 @@ def sign_main_api(
     """
     Generate all signing headers for a main API (edith.xiaohongshu.com) request.
 
-    Returns dict with keys: x-s, x-s-common, x-t, x-b3-traceid, x-xray-traceid
+    Returns dict of signing headers; always includes x-s, x-s-common, x-t,
+    x-b3-traceid, x-xray-traceid (plus x-mns / xy-direction since xhshow 0.2.0).
     """
     if method.upper() == "GET":
         return _xhshow.sign_headers_get(

@@ -2,10 +2,11 @@
 
 State file: ``~/.xiaohongshu-cli/fingerprint.json`` (0600).
 
-Why: xhshow 0.1.9 regenerates the hardware fingerprint (GPU, screen, CPU
-cores, memory, canvas hash, ...) on **every HTTP request**
-(``xhshow/core/common_sign.py:36`` → ``xhshow/generators/fingerprint.py:72``)
-and keeps the ``SessionManager`` counters in process memory only. The same
+Why: xhshow regenerates the hardware fingerprint (GPU, screen, CPU cores,
+memory, canvas hash, ...) on **every HTTP request** (verified for 0.1.9 and
+0.2.0: ``xhshow/core/common_sign.py`` → ``XsCommonSigner.sign`` →
+``FingerprintGenerator.generate``) and keeps the ``SessionManager`` counters in
+process memory only. The same
 ``a1`` cookie therefore claims a different machine on every request and a
 brand-new session on every process start — both are risk signals that request
 pacing cannot fix. This module persists the fingerprint and session counters
@@ -39,6 +40,14 @@ xhshow upgrade checkpoints — after bumping xhshow, verify:
   names ``page_load_timestamp`` / ``sequence_value`` / ``window_props_length``.
 - ``REQUIRED_FP_KEYS`` below must still cover every key
   ``FingerprintGenerator.generate_b1`` reads.
+
+Field stability contract (verified for xhshow 0.1.9 and 0.2.0): only ``x1``
+(user agent), ``x39``, ``x44`` (millisecond timestamp) and ``x57`` (cookie
+string) are refreshed per request by ``PersistentFingerprintGenerator`` —
+these mirror the fields ``FingerprintGenerator.update`` treats as dynamic.
+Every other persisted field (hardware/GPU/screen/canvas hashes, ``x53``
+random salt, ...) must stay stable for the lifetime of the store, otherwise
+the same ``a1`` cookie presents a different machine.
 """
 
 from __future__ import annotations
@@ -56,8 +65,8 @@ logger = logging.getLogger(__name__)
 
 STORE_VERSION = 1
 
-# Keys consumed by xhshow's FingerprintGenerator.generate_b1 (0.1.9). A
-# persisted fingerprint missing any of these (e.g. after an xhshow upgrade
+# Keys consumed by xhshow's FingerprintGenerator.generate_b1 (verified
+# identical in 0.1.9 and 0.2.0). A persisted fingerprint missing any of these (e.g. after an xhshow upgrade
 # changes the fingerprint shape) is discarded and regenerated.
 REQUIRED_FP_KEYS = frozenset({
     "x33", "x34", "x35", "x36", "x37", "x38", "x39", "x42", "x43", "x44",

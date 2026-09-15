@@ -62,6 +62,26 @@ class TestCliBasic:
         result = runner.invoke(cli, ["status", "--help"])
         assert result.exit_code == 0
 
+    def test_unsupported_option_hint_lists_supporting_commands(self):
+        """An option valid elsewhere must produce an actionable hint, not a dead end."""
+        result = runner.invoke(cli, ["sub-comments", "note1", "comment1", "--xsec-token", "tok"])
+        assert result.exit_code == 2
+        assert "No such option" in result.output
+        assert "Hint: --xsec-token is not supported by this command" in result.output
+        assert "comments" in result.output
+        assert "read" in result.output
+
+    def test_unknown_option_everywhere_has_no_hint(self):
+        result = runner.invoke(cli, ["read", "note1", "--definitely-not-a-flag"])
+        assert result.exit_code == 2
+        assert "No such option" in result.output
+        assert "Hint:" not in result.output
+
+    def test_supported_option_runs_normally(self):
+        """read DOES accept --xsec-token; it must fail later (no cookies), not at parsing."""
+        result = runner.invoke(cli, ["read", "note1", "--xsec-token", "tok"])
+        assert "No such option" not in result.output
+
     def test_all_commands_registered(self):
         result = runner.invoke(cli, ["--help"])
         commands_expected = [
