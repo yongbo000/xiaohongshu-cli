@@ -54,11 +54,82 @@ def print_json(data: Any) -> None:
     _stdout.print_json(json.dumps(data, ensure_ascii=False, indent=2))
 
 
+# Local patch for a PyYAML upstream defect (present in 6.0.2, 6.0.3 and
+# upstream main; https://github.com/yaml/pyyaml/issues/771 is a sister issue).
+# Emitter.analyze_scalar() accepts astral-plane characters (non-BMP,
+# '\U00010000' <= ch < '\U0010ffff', e.g. emoji) as printable unicode, but
+# write_double_quoted() only writes BMP ranges verbatim, so emoji in fields
+# forced into double-quoted style (anything containing \n / \t, e.g. a note's
+# `desc`) are emitted as noisy \Uxxxxxxxx escape sequences while BMP CJK
+# characters pass through untouched.
+# The method below is copied verbatim from PyYAML 6.0.3 yaml/emitter.py with
+# a single added range check in the "write verbatim" condition (marked
+# `# patched`); remove this subclass once upstream fixes the writer.
+class _AstralSafeDumper(yaml.SafeDumper):
+    """SafeDumper whose double-quoted writer emits astral characters verbatim."""
+
+    def write_double_quoted(self, text, split=True):
+        self.write_indicator('"', True)
+        start = end = 0
+        while end <= len(text):
+            ch = None
+            if end < len(text):
+                ch = text[end]
+            if ch is None or ch in '"\\\x85\u2028\u2029\uFEFF' \
+                    or not ('\x20' <= ch <= '\x7E'
+                            or (self.allow_unicode
+                                and ('\xA0' <= ch <= '\uD7FF'
+                                    or '\uE000' <= ch <= '\uFFFD'
+                                    or '\U00010000' <= ch < '\U0010ffff'))):  # patched
+                if start < end:
+                    data = text[start:end]
+                    self.column += len(data)
+                    if self.encoding:
+                        data = data.encode(self.encoding)
+                    self.stream.write(data)
+                    start = end
+                if ch is not None:
+                    if ch in self.ESCAPE_REPLACEMENTS:
+                        data = '\\'+self.ESCAPE_REPLACEMENTS[ch]
+                    elif ch <= '\xFF':
+                        data = '\\x%02X' % ord(ch)  # noqa: UP031 - verbatim upstream copy
+                    elif ch <= '\uFFFF':
+                        data = '\\u%04X' % ord(ch)  # noqa: UP031 - verbatim upstream copy
+                    else:
+                        data = '\\U%08X' % ord(ch)  # noqa: UP031 - verbatim upstream copy
+                    self.column += len(data)
+                    if self.encoding:
+                        data = data.encode(self.encoding)
+                    self.stream.write(data)
+                    start = end+1
+            if 0 < end < len(text)-1 and (ch == ' ' or start >= end)    \
+                    and self.column+(end-start) > self.best_width and split:
+                data = text[start:end]+'\\'
+                if start < end:
+                    start = end
+                self.column += len(data)
+                if self.encoding:
+                    data = data.encode(self.encoding)
+                self.stream.write(data)
+                self.write_indent()
+                self.whitespace = False
+                self.indention = False
+                if text[start] == ' ':
+                    data = '\\'
+                    self.column += len(data)
+                    if self.encoding:
+                        data = data.encode(self.encoding)
+                    self.stream.write(data)
+            end += 1
+        self.write_indicator('"', False)
+
+
 def print_yaml(data: Any) -> None:
     """Print raw YAML output to stdout."""
     click.echo(
-        yaml.safe_dump(
+        yaml.dump(
             data,
+            Dumper=_AstralSafeDumper,
             allow_unicode=True,
             sort_keys=False,
             default_flow_style=False,
