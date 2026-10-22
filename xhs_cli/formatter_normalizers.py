@@ -209,7 +209,9 @@ def _split_list_items(data: dict[str, Any]) -> tuple[list[dict[str, Any]], list[
       a ``note_card``) goes through the note whitelist projection.
     - ``model_type == "hot_query"`` is the "大家都在搜" hot-words block; its
       inner ``hot_query`` object (``{title, source, queries: [...]}``) is
-      collected separately instead of being projected as a note.
+      collected separately instead of being projected as a note. Callers decide
+      whether to surface it (compact output drops it by default; the explicit
+      ``--with-hot-queries`` switch surfaces text terms only).
     - Any other model_type is dropped entirely. Unknown entries are not notes,
       and forcing them through the note whitelist produced empty-shell rows
       (empty title/author/liked, a ``<uuid>#<timestamp>`` request-id in
@@ -237,31 +239,80 @@ def _split_list_items(data: dict[str, Any]) -> tuple[list[dict[str, Any]], list[
     return notes, hot_queries
 
 
-def compact_search_results(data: dict[str, Any]) -> dict[str, Any]:
+_HOT_QUERY_TEXT_FIELDS = ("name", "search_word")
+
+
+def compact_hot_queries(hot_queries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Project raw hot-query blocks to searchable text terms only.
+
+    The raw "大家都在搜" block carries CDN cover URLs with ``sign`` / ``t``
+    signature parameters that are useless to a caller searching by text and
+    dominate the compact payload. Keep the group title plus each query's
+    textual ``name`` / ``search_word``; drop ``cover``, ids, ``source`` and
+    every other field. Groups with no usable text terms are omitted.
+    """
+    projected: list[dict[str, Any]] = []
+    for group in hot_queries:
+        if not isinstance(group, dict):
+            continue
+        queries = group.get("queries")
+        terms: list[dict[str, str]] = []
+        if isinstance(queries, list):
+            for query in queries:
+                if not isinstance(query, dict):
+                    continue
+                term = {
+                    key: query[key]
+                    for key in _HOT_QUERY_TEXT_FIELDS
+                    if isinstance(query.get(key), str) and query[key].strip()
+                }
+                if term:
+                    terms.append(term)
+        if not terms:
+            continue
+        group_out: dict[str, Any] = {}
+        title = group.get("title")
+        if isinstance(title, str) and title:
+            group_out["title"] = title
+        group_out["queries"] = terms
+        projected.append(group_out)
+    return projected
+
+
+def compact_search_results(data: dict[str, Any], *, with_hot_queries: bool = False) -> dict[str, Any]:
     """Whitelist projection of search results for --compact structured output.
 
-    Note items are projected to the whitelist; ``hot_query`` items surface as a
-    top-level ``hot_queries`` list (only present when the search returned any).
+    Hot-query ("大家都在搜") items are omitted by default: compact is meant to
+    contain only hit items plus paging fields. With ``with_hot_queries=True``
+    they surface as a top-level ``hot_queries`` list containing text search
+    terms only (no cover CDN URLs or signature parameters).
     """
     notes, hot_queries = _split_list_items(data)
     compact: dict[str, Any] = {
         "items": notes,
         "has_more": bool(data.get("has_more", False)),
     }
-    if hot_queries:
-        compact["hot_queries"] = hot_queries
+    if with_hot_queries:
+        terms = compact_hot_queries(hot_queries)
+        if terms:
+            compact["hot_queries"] = terms
     return compact
 
 
-def compact_feed(data: dict[str, Any]) -> dict[str, Any]:
-    """Whitelist projection of feed/hot results for --compact structured output."""
+def compact_feed(data: dict[str, Any], *, with_hot_queries: bool = False) -> dict[str, Any]:
+    """Whitelist projection of feed/hot results for --compact structured output.
+
+    Hot-query blocks are dropped by default, mirroring ``compact_search_results``.
+    """
     notes, hot_queries = _split_list_items(data)
     compact: dict[str, Any] = {
         "items": notes,
         "has_more": bool(data.get("has_more", False)),
     }
-    if hot_queries:
-        compact["hot_queries"] = hot_queries
+    if with_hot_queries:
+        terms = compact_hot_queries(hot_queries)
+        if terms:
+            compact["hot_queries"] = terms
     return compact
 
 

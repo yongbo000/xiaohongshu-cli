@@ -32,6 +32,7 @@ from ._common import (
     compact_output_option,
     exit_for_error,
     handle_command,
+    hot_queries_output_option,
     run_client_action,
     structured_output_options,
 )
@@ -87,9 +88,20 @@ TYPE_MAP = {
 @click.option("--type", "note_type", type=click.Choice(["all", "video", "image"]), default="all", help="Note type")
 @click.option("--page", default=1, help="Page number")
 @compact_output_option
+@hot_queries_output_option
 @structured_output_options
 @click.pass_context
-def search(ctx, keyword: str, sort: str, note_type: str, page: int, compact: bool, as_json: bool, as_yaml: bool):
+def search(
+    ctx,
+    keyword: str,
+    sort: str,
+    note_type: str,
+    page: int,
+    compact: bool,
+    with_hot_queries: bool,
+    as_json: bool,
+    as_yaml: bool,
+):
     """Search notes by keyword."""
     def _search_action(client):
         # Fast-fail on an active risk mark, and track the keyword so a
@@ -112,7 +124,7 @@ def search(ctx, keyword: str, sort: str, note_type: str, page: int, compact: boo
         render=render_search_results,
         as_json=as_json,
         as_yaml=as_yaml,
-        project=compact_search_results if compact else None,
+        project=partial(compact_search_results, with_hot_queries=with_hot_queries) if compact else None,
     )
 
 
@@ -287,9 +299,10 @@ def user_posts(ctx, user_id: str, cursor: str, compact: bool, as_json: bool, as_
 
 @click.command()
 @compact_output_option
+@hot_queries_output_option
 @structured_output_options
 @click.pass_context
-def feed(ctx, compact: bool, as_json: bool, as_yaml: bool):
+def feed(ctx, compact: bool, with_hot_queries: bool, as_json: bool, as_yaml: bool):
     """Browse the recommendation feed."""
     def _feed_action(client):
         result = client.get_home_feed()
@@ -303,7 +316,7 @@ def feed(ctx, compact: bool, as_json: bool, as_yaml: bool):
         render=render_feed,
         as_json=as_json,
         as_yaml=as_yaml,
-        project=compact_feed if compact else None,
+        project=partial(compact_feed, with_hot_queries=with_hot_queries) if compact else None,
     )
 
 
@@ -409,9 +422,10 @@ HOT_CATEGORIES = {
     help="Category (fashion, food, cosmetics, movie, career, love, home, gaming, travel, fitness)",
 )
 @compact_output_option
+@hot_queries_output_option
 @structured_output_options
 @click.pass_context
-def hot(ctx, category: str, compact: bool, as_json: bool, as_yaml: bool):
+def hot(ctx, category: str, compact: bool, with_hot_queries: bool, as_json: bool, as_yaml: bool):
     """Browse hot/trending notes by category."""
     def _hot_action(client):
         result = client.get_hot_feed(HOT_CATEGORIES[category])
@@ -425,5 +439,5 @@ def hot(ctx, category: str, compact: bool, as_json: bool, as_yaml: bool):
         render=render_feed,
         as_json=as_json,
         as_yaml=as_yaml,
-        project=compact_feed if compact else None,
+        project=partial(compact_feed, with_hot_queries=with_hot_queries) if compact else None,
     )

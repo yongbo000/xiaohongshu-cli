@@ -10,6 +10,8 @@ from xhs_cli.cli import cli
 from xhs_cli.client_mixins import ReadingEndpointsMixin
 from xhs_cli.formatter_normalizers import (
     compact_comments,
+    compact_feed,
+    compact_hot_queries,
     compact_search_results,
     pick_note_fields,
     strip_note_media,
@@ -118,9 +120,12 @@ SEARCH_RESPONSE = {
     "has_more": True,
 }
 
-# Production regression fixture: a hot_query entry as actually returned by the
-# search API. hb.1 projected it through the note whitelist and produced an
-# empty-shell note row (empty title/author/liked, request-id-shaped note_id).
+# Production regression fixture: two "大家都在搜" blocks as actually returned
+# by the search API (2 groups × 4 terms here). Each term carries a signed
+# xhscdn cover URL with ``sign=`` / ``t=`` parameters — the bulk that compact
+# output must not carry. hb.1 projected these through the note whitelist and
+# produced empty-shell note rows (empty title/author/liked, request-id-shaped
+# note_id); hb.2 exposed them raw; hb.7 drops them unless explicitly requested.
 HOT_QUERY_REGRESSION_RESPONSE = {
     "items": [
         {
@@ -145,8 +150,93 @@ HOT_QUERY_REGRESSION_RESPONSE = {
                     {
                         "name": "regression 热词",
                         "search_word": "regression 热词",
-                        "cover": "https://sns-img.example.com/regression.jpg",
+                        "cover": (
+                            "https://sns-img-qc.xhscdn.com/1040g2sg31regression0"
+                            "?imageView2/2/w/1080/format/webp"
+                            "&sign=6d1f0e2c9b8a7f6e5d4c3b2a1908f7e6&t=1789296424807"
+                        ),
                         "id": "query-regression",
+                    },
+                    {
+                        "name": "夏日穿搭",
+                        "search_word": "夏日穿搭",
+                        "cover": (
+                            "https://sns-img-qc.xhscdn.com/1040g2sg31summer01"
+                            "?imageView2/2/w/1080/format/webp"
+                            "&sign=7e2a1b3c4d5e6f708192a3b4c5d6e7f8&t=1789296424808"
+                        ),
+                        "id": "query-summer",
+                    },
+                    {
+                        "name": "citywalk 路线",
+                        "search_word": "citywalk 路线",
+                        "cover": (
+                            "https://sns-img-qc.xhscdn.com/1040g2sg31citywalk2"
+                            "?imageView2/2/w/1080/format/webp"
+                            "&sign=8f3b2c4d5e6a7b8c9d0e1f2a3b4c5d6e&t=1789296424809"
+                        ),
+                        "id": "query-citywalk",
+                    },
+                    {
+                        "name": "咖啡店探店",
+                        "search_word": "咖啡店探店",
+                        "cover": (
+                            "https://sns-img-qc.xhscdn.com/1040g2sg31coffee03"
+                            "?imageView2/2/w/1080/format/webp"
+                            "&sign=9a4c3d5e6f7a8b9c0d1e2f3a4b5c6d7e&t=1789296424810"
+                        ),
+                        "id": "query-coffee",
+                    },
+                ],
+            },
+        },
+        {
+            "id": "7b72f1ae-9194-4163-9b43-9a6831485918#1789296424811",
+            "xsec_token": "ABPxn9gOSecondHotQueryToken",
+            "model_type": "hot_query",
+            "hot_query": {
+                "title": "大家都在搜",
+                "source": 2,
+                "queries": [
+                    {
+                        "name": "秋日护肤",
+                        "search_word": "秋日护肤",
+                        "cover": (
+                            "https://sns-img-qc.xhscdn.com/1040g2sg31skincare4"
+                            "?imageView2/2/w/1080/format/webp"
+                            "&sign=1b5d4e6f7a8b9c0d1e2f3a4b5c6d7e8f&t=1789296424812"
+                        ),
+                        "id": "query-skincare",
+                    },
+                    {
+                        "name": "小个子通勤",
+                        "search_word": "小个子通勤",
+                        "cover": (
+                            "https://sns-img-qc.xhscdn.com/1040g2sg31commute05"
+                            "?imageView2/2/w/1080/format/webp"
+                            "&sign=2c6e5f7a8b9c0d1e2f3a4b5c6d7e8f9a&t=1789296424813"
+                        ),
+                        "id": "query-commute",
+                    },
+                    {
+                        "name": "周末露营",
+                        "search_word": "周末露营",
+                        "cover": (
+                            "https://sns-img-qc.xhscdn.com/1040g2sg31camping06"
+                            "?imageView2/2/w/1080/format/webp"
+                            "&sign=3d7f6a8b9c0d1e2f3a4b5c6d7e8f9a0b&t=1789296424814"
+                        ),
+                        "id": "query-camping",
+                    },
+                    {
+                        "name": "居家收纳",
+                        "search_word": "居家收纳",
+                        "cover": (
+                            "https://sns-img-qc.xhscdn.com/1040g2sg31storage07"
+                            "?imageView2/2/w/1080/format/webp"
+                            "&sign=4e8a7b9c0d1e2f3a4b5c6d7e8f9a0b1c&t=1789296424815"
+                        ),
+                        "id": "query-storage",
                     },
                 ],
             },
@@ -358,8 +448,9 @@ class TestSearchCompact:
         result = _invoke(monkeypatch, _SearchClient(), ["search", "kw", "--compact", "--json"])
         data = _json_payload(result)["data"]
 
+        assert set(data) == {"items", "has_more"}
         assert data["has_more"] is True
-        assert data["hot_queries"] == [SEARCH_RESPONSE["items"][2]["hot_query"]]
+        assert "hot_queries" not in data
         assert len(data["items"]) == 2
         for item in data["items"]:
             assert set(item) == ITEM_WHITELIST
@@ -373,7 +464,7 @@ class TestSearchCompact:
         result = _invoke(monkeypatch, _SearchClient(), ["search", "kw", "--compact", "--yaml"])
         data = _yaml_payload(result)["data"]
 
-        assert set(data) == {"items", "has_more", "hot_queries"}
+        assert set(data) == {"items", "has_more"}
         assert {key for item in data["items"] for key in item} == ITEM_WHITELIST
 
     def test_default_output_unchanged(self, monkeypatch):
@@ -390,21 +481,97 @@ class _HotQueryRegressionClient:
         return HOT_QUERY_REGRESSION_RESPONSE
 
 
+class _HotQueryFeedClient:
+    def get_home_feed(self):
+        return HOT_QUERY_REGRESSION_RESPONSE
+
+    def get_hot_feed(self, category):
+        return HOT_QUERY_REGRESSION_RESPONSE
+
+
 class TestSearchHotQuery:
-    def test_hot_query_block_passed_through(self, monkeypatch):
+    def test_compact_drops_hot_query_blocks_by_default(self, monkeypatch):
         result = _invoke(monkeypatch, _HotQueryRegressionClient(), ["search", "kw", "--compact", "--json"])
         data = _json_payload(result)["data"]
 
-        assert data["hot_queries"] == [HOT_QUERY_REGRESSION_RESPONSE["items"][1]["hot_query"]]
-        (hot_query,) = data["hot_queries"]
-        assert hot_query["title"] == "大家都在搜"
-        assert hot_query["queries"][0]["search_word"] == "regression 热词"
+        assert set(data) == {"items", "has_more"}
+        assert "hot_queries" not in data
+        assert len(data["items"]) == 1
+        assert "大家都在搜" not in result.output
+        assert "xhscdn.com" not in result.output
+        assert "sign=" not in result.output
+        assert "t=" not in result.output
+
+    def test_with_hot_queries_returns_text_terms_only(self, monkeypatch):
+        result = _invoke(
+            monkeypatch,
+            _HotQueryRegressionClient(),
+            ["search", "kw", "--compact", "--with-hot-queries", "--json"],
+        )
+        data = _json_payload(result)["data"]
+
+        assert set(data) == {"items", "has_more", "hot_queries"}
+        assert len(data["hot_queries"]) == 2
+        for group in data["hot_queries"]:
+            assert set(group) <= {"title", "queries"}
+            assert group["title"] == "大家都在搜"
+            assert len(group["queries"]) == 4
+            for term in group["queries"]:
+                assert set(term) == {"name", "search_word"}
+                assert all(isinstance(value, str) and value for value in term.values())
+
+        assert not _contains_any_key(data["hot_queries"], {"cover", "id", "source"})
+        for leaked in ("xhscdn.com", "sign=", "t=", "imageView2"):
+            assert leaked not in result.output
+
+    def test_with_hot_queries_yaml(self, monkeypatch):
+        result = _invoke(
+            monkeypatch,
+            _HotQueryRegressionClient(),
+            ["search", "kw", "--compact", "--with-hot-queries", "--yaml"],
+        )
+        data = _yaml_payload(result)["data"]
+
+        assert [term["name"] for group in data["hot_queries"] for term in group["queries"]] == [
+            "regression 热词",
+            "夏日穿搭",
+            "citywalk 路线",
+            "咖啡店探店",
+            "秋日护肤",
+            "小个子通勤",
+            "周末露营",
+            "居家收纳",
+        ]
+
+    def test_default_full_output_keeps_raw_hot_query_block(self, monkeypatch):
+        result = _invoke(monkeypatch, _HotQueryRegressionClient(), ["search", "kw", "--json"])
+        data = _json_payload(result)["data"]
+
+        assert data == HOT_QUERY_REGRESSION_RESPONSE
+        assert data["items"][1]["hot_query"]["queries"][0]["cover"].startswith("https://sns-img-qc.xhscdn.com/")
+        assert "sign=" in data["items"][1]["hot_query"]["queries"][0]["cover"]
+        assert "t=" in data["items"][1]["hot_query"]["queries"][0]["cover"]
+
+    def test_with_hot_queries_without_compact_is_a_noop(self, monkeypatch):
+        result = _invoke(
+            monkeypatch,
+            _HotQueryRegressionClient(),
+            ["search", "kw", "--with-hot-queries", "--json"],
+        )
+        assert _json_payload(result)["data"] == HOT_QUERY_REGRESSION_RESPONSE
+
+    def test_help_documents_switch_and_default(self):
+        result = runner.invoke(cli, ["search", "--help"])
+        assert result.exit_code == 0, result.output
+        help_text = " ".join(result.output.split()).lower()
+        assert "--with-hot-queries" in help_text
+        assert "default: off" in help_text
 
     def test_no_empty_shell_note_rows(self, monkeypatch):
         result = _invoke(monkeypatch, _HotQueryRegressionClient(), ["search", "kw", "--compact", "--json"])
         data = _json_payload(result)["data"]
 
-        # Only the real note survives: the hot_query entry and the unknown
+        # Only the real note survives: the hot_query entries and the unknown
         # "ads" entry must not become empty-shell note rows.
         assert len(data["items"]) == 1
         (item,) = data["items"]
@@ -436,6 +603,50 @@ class TestFeedCompact:
 
         (item,) = data["items"]
         assert set(item) == ITEM_WHITELIST
+
+    def test_feed_compact_drops_hot_query_blocks_by_default(self, monkeypatch):
+        result = _invoke(monkeypatch, _HotQueryFeedClient(), ["feed", "--compact", "--json"])
+        data = _json_payload(result)["data"]
+
+        assert set(data) == {"items", "has_more"}
+        assert "hot_queries" not in data
+        assert "xhscdn.com" not in result.output
+
+    def test_feed_with_hot_queries_text_only(self, monkeypatch):
+        result = _invoke(
+            monkeypatch,
+            _HotQueryFeedClient(),
+            ["feed", "--compact", "--with-hot-queries", "--json"],
+        )
+        data = _json_payload(result)["data"]
+
+        assert len(data["hot_queries"]) == 2
+        assert not _contains_any_key(data["hot_queries"], {"cover", "id", "source"})
+        assert "xhscdn.com" not in result.output
+        assert "sign=" not in result.output
+        assert "t=" not in result.output
+
+    def test_hot_with_hot_queries_text_only(self, monkeypatch):
+        result = _invoke(
+            monkeypatch,
+            _HotQueryFeedClient(),
+            ["hot", "-c", "food", "--compact", "--with-hot-queries", "--yaml"],
+        )
+        data = _yaml_payload(result)["data"]
+
+        assert data["hot_queries"][0]["queries"][0] == {
+            "name": "regression 热词",
+            "search_word": "regression 热词",
+        }
+        assert not _contains_any_key(data["hot_queries"], {"cover", "id", "source"})
+
+    def test_feed_default_keeps_raw_hot_query_block(self, monkeypatch):
+        result = _invoke(monkeypatch, _HotQueryFeedClient(), ["feed", "--json"])
+        data = _json_payload(result)["data"]
+
+        assert data == HOT_QUERY_REGRESSION_RESPONSE
+        assert "sign=" in data["items"][1]["hot_query"]["queries"][0]["cover"]
+        assert "t=" in data["items"][1]["hot_query"]["queries"][0]["cover"]
 
     def test_feed_default_unchanged(self, monkeypatch):
         result = _invoke(monkeypatch, _FeedClient(), ["feed", "--json"])
@@ -607,7 +818,34 @@ class TestProjectionUnits:
     def test_hot_query_items_are_not_projected_as_notes(self):
         compact = compact_search_results(HOT_QUERY_REGRESSION_RESPONSE)
         assert [item["note_id"] for item in compact["items"]] == ["note-1"]
-        assert compact["hot_queries"] == [HOT_QUERY_REGRESSION_RESPONSE["items"][1]["hot_query"]]
+        assert "hot_queries" not in compact
+
+    def test_hot_queries_are_text_only_when_requested(self):
+        compact = compact_search_results(HOT_QUERY_REGRESSION_RESPONSE, with_hot_queries=True)
+        assert len(compact["hot_queries"]) == 2
+        assert not _contains_any_key(compact["hot_queries"], {"cover", "id", "source"})
+        assert compact["hot_queries"][0] == {
+            "title": "大家都在搜",
+            "queries": [
+                {"name": "regression 热词", "search_word": "regression 热词"},
+                {"name": "夏日穿搭", "search_word": "夏日穿搭"},
+                {"name": "citywalk 路线", "search_word": "citywalk 路线"},
+                {"name": "咖啡店探店", "search_word": "咖啡店探店"},
+            ],
+        }
+
+    def test_compact_feed_omits_hot_queries_by_default(self):
+        compact = compact_feed(HOT_QUERY_REGRESSION_RESPONSE)
+        assert "hot_queries" not in compact
+
+    def test_compact_hot_queries_skips_groups_without_text_terms(self):
+        raw = [
+            {"title": "无文本", "queries": [{"cover": "https://sns-img.example.com/x.jpg", "id": "q"}]},
+            {"title": "有文本", "queries": [{"name": "热词", "cover": "https://sns-img.example.com/x.jpg"}]},
+        ]
+        assert compact_hot_queries(raw) == [
+            {"title": "有文本", "queries": [{"name": "热词"}]},
+        ]
 
     def test_unknown_model_types_are_dropped(self):
         data = {"items": [{"model_type": "ads", "id": "ad-1"}, {"model_type": "rec_query", "id": "rq-1"}]}
@@ -640,6 +878,20 @@ class TestPayloadSizeReduction:
         with capsys.disabled():
             print(f"\nsearch structured payload: full={full}B compact={compact}B")
         assert compact < full // 2
+
+    def test_hot_query_block_can_be_dropped_or_kept_as_text(self, capsys):
+        full = self._size(HOT_QUERY_REGRESSION_RESPONSE)
+        default = self._size(compact_search_results(HOT_QUERY_REGRESSION_RESPONSE))
+        with_terms = self._size(
+            compact_search_results(HOT_QUERY_REGRESSION_RESPONSE, with_hot_queries=True)
+        )
+        with capsys.disabled():
+            print(
+                "\nhot-query fixture: "
+                f"full={full}B compact={default}B compact+terms={with_terms}B"
+            )
+        assert default < with_terms < full
+        assert default <= full // 2
 
     def test_no_media_shrinks_note_payload(self, capsys):
         full = self._size(NOTE_DETAIL_RESPONSE)

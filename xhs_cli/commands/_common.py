@@ -43,6 +43,18 @@ def compact_output_option(command: Callable | None = None, *, help: str | None =
     return option(command)
 
 
+def hot_queries_output_option(command: Callable) -> Callable:
+    """Add --with-hot-queries for compact list output (opt-in, text only)."""
+    return click.option(
+        "--with-hot-queries",
+        "with_hot_queries",
+        is_flag=True,
+        default=False,
+        help="With --compact, include '大家都在搜' hot search terms as text only "
+        "(name/search_word; drops cover URLs and sign/t parameters). Default: off.",
+    )(command)
+
+
 def _cookie_source(ctx) -> str:
     return ctx.obj.get("cookie_source", "auto") if ctx.obj else "auto"
 

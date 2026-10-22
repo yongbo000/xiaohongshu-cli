@@ -33,6 +33,37 @@ error:
 
 `--compact` (and `read --no-media` / `--fields`) only trims the structured payload inside `data`; the envelope is unchanged and the default (no switches) output is byte-identical to the raw API payload.
 
+`search` / `feed` / `hot --compact` shape:
+
+```yaml
+data:
+  items:
+    - note_id: ...
+      xsec_token: ...
+      title: ...
+      author: ...
+      liked: ...
+      note_type: image | video
+  has_more: true
+```
+
+`user-posts` / `favorites` / `likes` / `my-notes --compact` use the same note whitelist plus `cursor`.
+
+Hot-query items (`model_type: hot_query`, the "大家都在搜" block mixed into `data.items`) are **dropped by default** in compact mode: no top-level `hot_queries` key is emitted. Add `--with-hot-queries` (only meaningful together with `--compact`; default off) to opt in to text-only terms:
+
+```yaml
+data:
+  items: [...]
+  has_more: true
+  hot_queries:
+    - title: 大家都在搜
+      queries:
+        - name: ...
+          search_word: ...
+```
+
+The opt-in projection never includes `cover` CDN URLs, query `id`s, `source`, or `sign=` / `t=` signature parameters. Without `--compact`, the full raw `hot_query` block is returned unchanged.
+
 `comments` / `sub-comments --compact` shape:
 
 ```yaml
