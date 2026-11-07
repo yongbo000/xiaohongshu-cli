@@ -42,10 +42,21 @@ data:
       xsec_token: ...
       title: ...
       author: ...
-      liked: ...
+      liked: ...              # unchanged: liked_count string form
       note_type: image | video
+      like_count: 123         # int, or null when missing/unrecognised
+      collected_count: 45     # int, or null
+      comment_count: 6        # int, or null
+      image_count: 3          # int, or null (video without image_list -> null)
+      publish_time: 1757700000000  # epoch ms int, or null
   has_more: true
 ```
+
+The five additive fields are always present. Missing or unrecognised values are
+`null` (never 0: 0 is a real count), decimal strings such as `"3496"` become
+ints, and locale formats such as `"1.2万"` are treated as unknown. `image_count`
+accepts `image_list` and the plural `images_list`; `publish_time` is read only
+from an explicit epoch field and never derived from display text.
 
 `user-posts` / `favorites` / `likes` / `my-notes --compact` use the same note whitelist plus `cursor`.
 

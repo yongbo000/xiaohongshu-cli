@@ -84,7 +84,12 @@ TYPE_MAP = {
 
 @click.command()
 @click.argument("keyword")
-@click.option("--sort", type=click.Choice(["general", "popular", "latest"]), default="general", help="Sort order")
+@click.option(
+    "--sort",
+    type=click.Choice(["general", "popular", "latest"]),
+    default="general",
+    help="Sort order: general, popular (最多点赞, upstream popularity_descending), latest",
+)
 @click.option("--type", "note_type", type=click.Choice(["all", "video", "image"]), default="all", help="Note type")
 @click.option("--page", default=1, help="Page number")
 @compact_output_option

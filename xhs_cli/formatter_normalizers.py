@@ -18,6 +18,87 @@ def _coerce_int(value: Any, default: int = 0) -> int:
     return default
 
 
+_COUNT_FIELD_MAP = (
+    ("like_count", "liked_count"),
+    ("collected_count", "collected_count"),
+    ("comment_count", "comment_count"),
+)
+_IMAGE_LIST_KEYS = ("image_list", "images_list")
+_PUBLISH_TIME_KEYS = ("time", "publish_time", "create_time")
+
+
+def _coerce_decimal_int(value: Any) -> int | None:
+    """Parse a decimal integer, returning None for unknown/missing formats.
+
+    Interaction counts arrive as JSON ints or decimal strings such as
+    ``"3496"``. Locale-formatted values like ``"1.2万"`` are not understood
+    and must stay unknown (None) rather than becoming 0: 0 is a real count.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if text.isascii() and text.isdigit():
+            return int(text)
+    return None
+
+
+def _compact_metric_fields(note: dict[str, Any], *fallbacks: dict[str, Any]) -> dict[str, Any]:
+    """Extract additive compact-list metrics without inventing defaults.
+
+    Counts prefer the nested ``interact_info`` object and fall back to the
+    note's top-level fields (my-notes exposes ``liked_count`` /
+    ``comment_count`` there). Image count accepts both ``image_list`` and the
+    plural ``images_list`` paged-notes key, and only when the value is a real
+    list. Publish time is read only from an explicit epoch field; display
+    strings such as ``corner_tag_info`` are never parsed into a timestamp.
+
+    Every field is always present. Missing or unrecognised values become
+    ``None`` — never 0.
+    """
+    sources = tuple(source for source in (note, *fallbacks) if isinstance(source, dict))
+    interact = note.get("interact_info")
+    if not isinstance(interact, dict):
+        interact = {}
+
+    metrics: dict[str, Any] = {}
+    for output_key, source_key in _COUNT_FIELD_MAP:
+        value: int | None = None
+        if source_key in interact:
+            value = _coerce_decimal_int(interact[source_key])
+        else:
+            for source in sources:
+                if source_key in source:
+                    value = _coerce_decimal_int(source[source_key])
+                    break
+        metrics[output_key] = value
+
+    image_count: int | None = None
+    for source in sources:
+        for key in _IMAGE_LIST_KEYS:
+            value = source.get(key)
+            if isinstance(value, list):
+                image_count = len(value)
+                break
+        if image_count is not None:
+            break
+    metrics["image_count"] = image_count
+
+    publish_time: int | None = None
+    for source in sources:
+        for key in _PUBLISH_TIME_KEYS:
+            if key in source:
+                publish_time = _coerce_decimal_int(source[key])
+                if publish_time is not None:
+                    break
+        if publish_time is not None:
+            break
+    metrics["publish_time"] = publish_time
+    return metrics
+
+
 def normalize_user_info(data: dict[str, Any]) -> dict[str, Any]:
     basic = data.get("basic_info", data)
     interactions = data.get("interactions", [])
@@ -73,6 +154,7 @@ def normalize_note_summary(item: dict[str, Any]) -> dict[str, Any] | None:
         "note_type": "video" if note_card.get("type") == "video" else "image",
         "note_id": item.get("id", note_card.get("note_id", "")),
         "xsec_token": item.get("xsec_token", note_card.get("xsec_token", "")),
+        **_compact_metric_fields(note_card, item),
     }
 
 
@@ -327,6 +409,7 @@ def compact_note_item(note: dict[str, Any]) -> dict[str, Any]:
         "author": user.get("nickname", ""),
         "liked": str(interact.get("liked_count", note.get("liked_count", ""))),
         "note_type": "video" if note.get("type") == "video" else "image",
+        **_compact_metric_fields(note),
     }
 
 

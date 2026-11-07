@@ -84,8 +84,8 @@ Payloads live under `.data`.
 
 | Command | Description | Example |
 |---------|-------------|---------|
-| `xhs search <keyword>` | Search notes | `xhs search "美食" --sort popular --type video` |
-| `xhs search <keyword> --compact [--with-hot-queries]` | Compact hits + paging; hot-query blocks dropped by default, opt-in emits text terms only (no cover/sign) | `xhs search "美食" --compact --json` |
+| `xhs search <keyword>` | Search notes (`--sort popular` = most liked, upstream order) | `xhs search "美食" --sort popular --type video` |
+| `xhs search <keyword> --compact [--with-hot-queries]` | Compact hits + interaction/image/publish metrics + paging; hot-query blocks dropped by default, opt-in emits text terms only (no cover/sign) | `xhs search "美食" --compact --json` |
 | `xhs read <id_or_url_or_index>` | Read a note by ID, URL, or short index | `xhs read 1` / `xhs read "https://...?xsec_token=xxx"` |
 | `xhs comments <id_or_url_or_index>` | Get comments by ID, URL, or short index | `xhs comments 1` / `xhs comments "https://...?xsec_token=..."` |
 | `xhs comments <id_or_url> --all` | Get ALL comments (auto-paginate) | `xhs comments "<url>" --all --json` |

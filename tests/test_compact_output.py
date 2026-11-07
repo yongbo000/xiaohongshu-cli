@@ -12,6 +12,8 @@ from xhs_cli.formatter_normalizers import (
     compact_comments,
     compact_feed,
     compact_hot_queries,
+    compact_note_item,
+    compact_paged_notes,
     compact_search_results,
     pick_note_fields,
     strip_note_media,
@@ -20,7 +22,19 @@ from xhs_cli.formatter_utils import success_payload
 
 runner = CliRunner()
 
-ITEM_WHITELIST = {"note_id", "xsec_token", "title", "author", "liked", "note_type"}
+ITEM_WHITELIST = {
+    "note_id",
+    "xsec_token",
+    "title",
+    "author",
+    "liked",
+    "note_type",
+    "like_count",
+    "collected_count",
+    "comment_count",
+    "image_count",
+    "publish_time",
+}
 MEDIA_KEYS = {"image_list", "cover", "stream", "live_photo", "video"}
 
 _LONG = "x" * 120
@@ -78,6 +92,7 @@ SEARCH_RESPONSE = {
                 "display_title": "第一篇笔记标题",
                 "user": {"user_id": "u-1", "nickname": "作者甲"},
                 "interact_info": {"liked_count": "123", "collected_count": "45", "comment_count": "6"},
+                "time": 1757700000000,
                 "cover": {"url_default": f"https://sns-img.example.com/cover.jpg?{_LONG}"},
                 "image_list": [_image(0), _image(1), _image(2)],
             },
@@ -274,7 +289,8 @@ PAGED_RESPONSE = {
             "display_title": "分页笔记一",
             "type": "normal",
             "user": {"nickname": "分页作者"},
-            "interact_info": {"liked_count": "7"},
+            "interact_info": {"liked_count": "7", "collected_count": "4", "comment_count": "2"},
+            "time": 1757720000000,
             "cover": {"url_default": f"https://sns-img.example.com/paged.jpg?{_LONG}"},
             "images_list": [_image(4), _image(5)],
         },
@@ -299,6 +315,7 @@ CREATOR_RESPONSE = {
             "type": "video",
             "liked_count": "3",
             "comment_count": "1",
+            "time": 1757730000000,
             "status": 0,
             "cover": {"url": f"https://sns-img.example.com/mine.jpg?{_LONG}"},
         }
@@ -458,7 +475,23 @@ class TestSearchCompact:
         assert first["note_id"] == "note-1"
         assert first["xsec_token"] == "token-1"
         assert first["note_type"] == "image"
+        assert first["liked"] == "123"
+        assert first["like_count"] == 123
+        assert first["collected_count"] == 45
+        assert first["comment_count"] == 6
+        assert first["image_count"] == 3
+        assert first["publish_time"] == 1757700000000
+        assert all(
+            isinstance(first[key], int)
+            for key in ("like_count", "collected_count", "comment_count", "image_count", "publish_time")
+        )
         assert second["note_type"] == "video"
+        assert second["liked"] == "9"
+        assert second["like_count"] == 9
+        assert second["collected_count"] is None
+        assert second["comment_count"] is None
+        assert second["image_count"] is None
+        assert second["publish_time"] is None
 
     def test_compact_yaml_whitelist(self, monkeypatch):
         result = _invoke(monkeypatch, _SearchClient(), ["search", "kw", "--compact", "--yaml"])
@@ -658,6 +691,14 @@ class TestFeedCompact:
         assert "推荐页" in result.output
         assert "推荐笔记" in result.output
 
+    def test_compact_does_not_affect_rich_search_render(self, monkeypatch):
+        monkeypatch.setenv("OUTPUT", "rich")
+        result = _invoke(monkeypatch, _SearchClient(), ["search", "kw", "--compact"])
+        assert "搜索结果" in result.output
+        assert "第一篇笔记标题" in result.output
+        assert "like_count" not in result.output
+        assert "publish_time" not in result.output
+
 
 class TestPagedCompact:
     def test_user_posts_compact(self, monkeypatch):
@@ -672,7 +713,13 @@ class TestPagedCompact:
         assert first["xsec_token"] == "paged-token-1"
         assert first["author"] == "分页作者"
         assert first["note_type"] == "image"
+        assert first["like_count"] == 7
+        assert first["collected_count"] == 4
+        assert first["comment_count"] == 2
+        assert first["image_count"] == 2
+        assert first["publish_time"] == 1757720000000
         assert second["note_type"] == "video"
+        assert second["image_count"] is None
 
     def test_favorites_compact_yaml(self, monkeypatch):
         result = _invoke(monkeypatch, _FavoritesClient(), ["favorites", "user-1", "--compact", "--yaml"])
@@ -698,6 +745,11 @@ class TestPagedCompact:
         assert item["note_id"] == "mine-1"
         assert item["liked"] == "3"
         assert item["note_type"] == "video"
+        assert item["like_count"] == 3
+        assert item["comment_count"] == 1
+        assert item["collected_count"] is None
+        assert item["image_count"] is None
+        assert item["publish_time"] == 1757730000000
 
     def test_user_posts_default_unchanged(self, monkeypatch):
         result = _invoke(monkeypatch, _UserPostsClient(), ["user-posts", "user-1", "--json"])
@@ -856,6 +908,90 @@ class TestProjectionUnits:
         shell = {"id": "flat-2"}
         compact = compact_search_results({"items": [note, shell]})
         assert [item["note_id"] for item in compact["items"]] == ["flat-1"]
+
+    def test_compact_metrics_keep_real_zero_distinct_from_null(self):
+        compact = compact_note_item(
+            {
+                "note_id": "zero",
+                "interact_info": {"liked_count": "0", "collected_count": 0, "comment_count": "0"},
+                "image_list": [],
+            }
+        )
+        assert compact["like_count"] == 0
+        assert compact["collected_count"] == 0
+        assert compact["comment_count"] == 0
+        assert compact["image_count"] == 0
+
+    def test_compact_metrics_missing_fields_are_all_null(self):
+        compact = compact_note_item({"note_id": "empty", "display_title": "空笔记"})
+        assert compact["liked"] == ""
+        for key in ("like_count", "collected_count", "comment_count", "image_count", "publish_time"):
+            assert compact[key] is None
+
+    def test_compact_metrics_unknown_count_formats_are_null(self):
+        compact = compact_note_item(
+            {
+                "note_id": "locale",
+                "interact_info": {
+                    "liked_count": "1.2万",
+                    "collected_count": "abc",
+                    "comment_count": "3,496",
+                },
+            }
+        )
+        assert compact["like_count"] is None
+        assert compact["collected_count"] is None
+        assert compact["comment_count"] is None
+
+    def test_compact_metrics_image_count_plural_key_and_list_check(self):
+        plural = compact_note_item({"note_id": "plural", "images_list": [{}, {}]})
+        assert plural["image_count"] == 2
+
+        not_a_list = compact_note_item({"note_id": "bad-image", "image_list": {"url": "x"}})
+        assert not_a_list["image_count"] is None
+
+        falls_back_to_plural = compact_note_item(
+            {"note_id": "fallback", "image_list": "not-a-list", "images_list": [{}]}
+        )
+        assert falls_back_to_plural["image_count"] == 1
+
+    def test_compact_metrics_nested_interact_wins_over_top_level_fallback(self):
+        compact = compact_note_item(
+            {
+                "note_id": "fallback",
+                "interact_info": {"liked_count": "5"},
+                "liked_count": "99",
+                "comment_count": "7",
+            }
+        )
+        assert compact["like_count"] == 5
+        assert compact["comment_count"] == 7
+
+    def test_publish_time_never_derived_from_display_text(self):
+        compact = compact_note_item(
+            {
+                "note_id": "display-time",
+                "corner_tag_info": [{"type": "publish_time", "text": "05-15"}],
+                "time_text": "2天前",
+                "last_update_time": 1757800000000,
+            }
+        )
+        assert compact["publish_time"] is None
+
+    def test_publish_time_accepts_decimal_epoch_string(self):
+        compact = compact_note_item({"note_id": "epoch", "time": "1757700000000"})
+        assert compact["publish_time"] == 1757700000000
+
+    def test_compact_paged_projection_does_not_mutate_input(self):
+        note = {
+            "note_id": "paged",
+            "interact_info": {"liked_count": "1"},
+            "images_list": [{}],
+            "time": 1757700000000,
+        }
+        before = dict(note)
+        compact_paged_notes({"notes": [note]})
+        assert note == before
 
     def test_strip_note_media_does_not_mutate_input(self):
         payload = {"items": [{"note_card": {"image_list": [_image(0)], "title": "t"}}]}
