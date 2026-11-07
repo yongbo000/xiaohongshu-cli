@@ -4,7 +4,7 @@ Usage:
     xhs login / status / logout / fingerprint-reset
     xhs search <keyword> [--sort general|popular|latest] [--type video|image] [--page N]
     # popular = 最多点赞 (upstream sort), not a local re-rank
-    xhs read <id_or_url> [--xsec-token TOKEN]
+    xhs read <id_or_url> [--xsec-token TOKEN] [--projection all|images|metrics]
     xhs comments <id_or_url>
     xhs user <user_id>
     xhs user-posts <user_id> [--cursor CURSOR]

@@ -535,3 +535,117 @@ def pick_note_fields(data: Any, fields: list[str]) -> Any:
     if isinstance(stripped, dict):
         return {field: stripped[field] for field in fields if field in stripped}
     return stripped
+
+
+# ─── Stable read projection (xhs read --projection) ─────────────────────────
+#
+# The transport lane needs note text, interaction counts and per-image
+# metadata (file_id/width/height) without the signed CDN URL variants that
+# dominate a multi-image `read` payload. This projection is an explicit,
+# fixed whitelist: raw payloads are never passed through, so url_pre /
+# url_default / sign= cannot leak even if the upstream schema grows new URL
+# fields. Array order mirrors image_list order; index is 0-based.
+
+_READ_PROJECTIONS = frozenset({"all", "images", "metrics"})
+
+
+def _read_note_parts(data: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return (note_card, envelope_item) for feed-API or flat HTML payloads."""
+    if not isinstance(data, dict):
+        return {}, {}
+    items = data.get("items")
+    if isinstance(items, list):
+        if not items:
+            return {}, {}
+        item = items[0] if isinstance(items[0], dict) else {}
+        note = item.get("note_card")
+        if isinstance(note, dict):
+            return note, item
+        # Tolerate a flat note accidentally wrapped in a one-item envelope.
+        return item, item
+    return data, {}
+
+
+def _first_nonempty_str(*values: Any) -> str:
+    for value in values:
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def _project_image_meta(image: Any, index: int) -> dict[str, Any]:
+    """Whitelist one image_list entry; missing dimensions/file_id become None."""
+    entry = image if isinstance(image, dict) else {}
+    file_id = _first_nonempty_str(entry.get("file_id"), entry.get("fileid"))
+    return {
+        "index": index,
+        "file_id": file_id or None,
+        "width": _coerce_decimal_int(entry.get("width")),
+        "height": _coerce_decimal_int(entry.get("height")),
+    }
+
+
+def project_note_read(data: Any, *, projection: str = "all") -> dict[str, Any]:
+    """Project one note detail into the stable low-volume read shape.
+
+    Supported values:
+      - ``all``: note_id/title/desc + interaction counts + image metadata.
+      - ``images``: note_id/title + image_count + ordered image metadata.
+      - ``metrics``: note_id/title + interaction counts.
+
+    Interaction keys reuse the hb.8 names (``like_count`` /
+    ``collected_count`` / ``comment_count``) and are ints or None, never 0
+    for missing/unrecognised input. ``image_count`` is None when no image
+    list exists (empty list => 0). Images only expose index/file_id/width/
+    height; signed URL fields are never read. Malformed/empty payloads
+    produce a stable empty projection instead of raising.
+    """
+    if projection not in _READ_PROJECTIONS:
+        raise ValueError(f"unknown read projection: {projection!r}")
+
+    note, item = _read_note_parts(data)
+    flat = data if isinstance(data, dict) else {}
+    metrics = _compact_metric_fields(note, item)
+
+    note_id = _first_nonempty_str(
+        note.get("note_id"),
+        item.get("id"),
+        item.get("note_id"),
+        note.get("id"),
+        flat.get("note_id"),
+        flat.get("id"),
+    )
+    title = _first_nonempty_str(
+        note.get("title"),
+        note.get("display_title"),
+        item.get("title"),
+        flat.get("title"),
+        flat.get("display_title"),
+    )
+    desc = _first_nonempty_str(note.get("desc"), item.get("desc"), flat.get("desc"))
+
+    projected: dict[str, Any] = {"note_id": note_id, "title": title}
+    if projection == "all":
+        projected["desc"] = desc
+
+    if projection in ("all", "metrics"):
+        projected["like_count"] = metrics["like_count"]
+        projected["collected_count"] = metrics["collected_count"]
+        projected["comment_count"] = metrics["comment_count"]
+
+    if projection in ("all", "images"):
+        images: list[Any] | None = None
+        for source in (note, item):
+            for key in _IMAGE_LIST_KEYS:
+                value = source.get(key)
+                if isinstance(value, list):
+                    images = value
+                    break
+            if images is not None:
+                break
+        projected["image_count"] = metrics["image_count"]
+        projected["image_list"] = [
+            _project_image_meta(image, index) for index, image in enumerate(images or [])
+        ]
+
+    return projected

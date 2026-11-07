@@ -87,6 +87,7 @@ Payloads live under `.data`.
 | `xhs search <keyword>` | Search notes (`--sort popular` = most liked, upstream order) | `xhs search "美食" --sort popular --type video` |
 | `xhs search <keyword> --compact [--with-hot-queries]` | Compact hits + interaction/image/publish metrics + paging; hot-query blocks dropped by default, opt-in emits text terms only (no cover/sign) | `xhs search "美食" --compact --json` |
 | `xhs read <id_or_url_or_index>` | Read a note by ID, URL, or short index | `xhs read 1` / `xhs read "https://...?xsec_token=xxx"` |
+| `xhs read <id_or_url_or_index> --projection all\|images\|metrics` | Stable low-volume transport projection: note text + interaction counts + ordered image metadata (index/file_id/width/height); never signed URLs | `xhs read 1 --projection all --json` |
 | `xhs comments <id_or_url_or_index>` | Get comments by ID, URL, or short index | `xhs comments 1` / `xhs comments "https://...?xsec_token=..."` |
 | `xhs comments <id_or_url> --all` | Get ALL comments (auto-paginate) | `xhs comments "<url>" --all --json` |
 | `xhs comments <id_or_url> --compact [--limit N]` | Trimmed comment fields (whitelist projection, keeps cursors; `--limit` caps top-level count, with `--all` stops paginating early) | `xhs comments 1 --all --compact --limit 100 --json` |
@@ -156,6 +157,15 @@ xhs like "$NOTE_ID"
 xhs search "美食" --compact --json | jq '.data.items'
 # Opt in to text-only hot terms (name/search_word; no cover URLs or signatures)
 xhs search "美食" --compact --with-hot-queries --json | jq '.data.hot_queries'
+```
+
+### Stable image-transport read (no signed URLs)
+
+```bash
+# Rebuild a fixed whitelist instead of dumping raw image_list URL variants
+xhs read "$NOTE_ID" --projection all --json \
+  | jq '.data | {note_id, desc, like_count, collected_count, comment_count, image_count, image_list}'
+# Subsets: --projection images (metadata only) / --projection metrics (counts only)
 ```
 
 ### Browse trending food notes

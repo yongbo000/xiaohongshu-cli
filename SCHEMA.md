@@ -31,7 +31,7 @@ error:
 
 ## Compact projections
 
-`--compact` (and `read --no-media` / `--fields`) only trims the structured payload inside `data`; the envelope is unchanged and the default (no switches) output is byte-identical to the raw API payload.
+`--compact` (and `read --no-media` / `--fields` / `--projection`) only transforms the structured payload inside `data`; the envelope is unchanged and the default (no switches) output is byte-identical to the raw API payload.
 
 `search` / `feed` / `hot --compact` shape:
 
@@ -74,6 +74,34 @@ data:
 ```
 
 The opt-in projection never includes `cover` CDN URLs, query `id`s, `source`, or `sign=` / `t=` signature parameters. Without `--compact`, the full raw `hot_query` block is returned unchanged.
+
+### `read --projection` (stable transport shape)
+
+`read --projection all|images|metrics` (default off) does not trim the raw payload in place: it rebuilds a fixed whitelist. It is intended for image-transport consumers that need note text, interaction counts and per-image metadata without signed CDN URLs.
+
+```yaml
+data:
+  note_id: ...
+  title: ...
+  desc: ...                  # only with `all`
+  like_count: 123            # only with `all` / `metrics`
+  collected_count: 45        # only with `all` / `metrics`
+  comment_count: 6           # only with `all` / `metrics`
+  image_count: 3             # only with `all` / `images`; null when absent, 0 when empty
+  image_list:                # only with `all` / `images`; source order, index is 0-based
+    - index: 0
+      file_id: ...
+      width: 1080
+      height: 1440
+```
+
+- `all` = `note_id` + `title` + `desc` + three interaction counts + `image_count` + `image_list`.
+- `images` = `note_id` + `title` + `image_count` + `image_list`.
+- `metrics` = `note_id` + `title` + three interaction counts.
+
+Counts reuse the hb.8 names and semantics: int, or `null` when missing/unrecognised (never 0 unless the API reports a real zero). Image `file_id` / `width` / `height` are `null` when absent; `image_count` is `null` when no image list field exists and `0` for an empty list. Missing text becomes an empty string. Malformed entries/payloads produce a stable empty projection instead of raising.
+
+The projection never emits `url`, `url_pre`, `url_default`, `info_list`, `cover`, video subtrees, or any `sign=` / `t=` signature parameters. `--projection` cannot be combined with `--no-media` or `--fields` (usage error). Without `--projection`, output is unchanged.
 
 `comments` / `sub-comments --compact` shape:
 

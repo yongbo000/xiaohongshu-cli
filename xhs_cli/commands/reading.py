@@ -25,6 +25,7 @@ from ..formatter_normalizers import (
     compact_paged_notes,
     compact_search_results,
     pick_note_fields,
+    project_note_read,
     strip_note_media,
 )
 from ..note_refs import resolve_note_reference, save_index_from_items, save_index_from_notes
@@ -148,17 +149,39 @@ def search(
     metavar="LIST",
     help="Comma-separated note fields to keep in structured output (implies --no-media)",
 )
+@click.option(
+    "--projection",
+    type=click.Choice(["all", "images", "metrics"]),
+    default=None,
+    help="Stable low-volume structured projection: all (note text + interaction metrics + "
+    "image metadata), images (note text + image metadata), or metrics (note text + interaction "
+    "metrics). Never emits signed media URLs. Default: off (raw payload).",
+)
 @structured_output_options
 @click.pass_context
-def read(ctx, id_or_url: str, xsec_token: str, no_media: bool, fields: str | None, as_json: bool, as_yaml: bool):
+def read(
+    ctx,
+    id_or_url: str,
+    xsec_token: str,
+    no_media: bool,
+    fields: str | None,
+    projection: str | None,
+    as_json: bool,
+    as_yaml: bool,
+):
     """Read a note by ID, URL, or short index."""
     note_id, token, url_source = resolve_note_reference(id_or_url, xsec_token=xsec_token)
     xsec_source = url_source or "pc_feed"
     if token:
         cache_note_context(note_id, token, xsec_source)
 
+    if projection is not None and (fields is not None or no_media):
+        raise click.UsageError("--projection cannot be combined with --fields or --no-media.")
+
     project = None
-    if fields is not None:
+    if projection is not None:
+        project = partial(project_note_read, projection=projection)
+    elif fields is not None:
         whitelist = [field.strip() for field in fields.split(",") if field.strip()]
         if not whitelist:
             raise click.UsageError("--fields requires at least one field name.")
